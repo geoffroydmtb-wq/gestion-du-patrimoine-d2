@@ -208,21 +208,22 @@ def simulate_dca(ticker, monthly_amount, years):
 with st.sidebar:
     st.markdown("### WEALTH MANAGER")
     st.markdown("---")
-    # MENU MIS À JOUR AVEC LE NOUVEL ONGLET
+    
+    # MENU SÉPARÉ CLAIREMENT EN 6 ONGLETS
     menu_selection = st.radio(
         "NAVIGATION", 
         [
             "Tableau de Bord", 
             "Marchés & Analyse", 
             "Transactions", 
-            "Laboratoire & Outils", 
-            "Calculateur Inflation", # NOUVEL ONGLET ICI
+            "Simulateur DCA",         # Onglet spécifique 1
+            "Calculateur Inflation",  # Onglet spécifique 2
             "Actualités & Infos"
         ], 
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v4.1 • Inflation Tab")
+    st.caption("v5.0 • Full Menu Split")
 
 # ==============================================================================
 # PAGE 1 : TABLEAU DE BORD
@@ -404,11 +405,11 @@ elif menu_selection == "Transactions":
     st.dataframe(st.session_state.journal_ordres, use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# PAGE 4 : LABORATOIRE & OUTILS
+# PAGE 4 : SIMULATEUR DCA (ONGLET SÉPARÉ 1)
 # ==============================================================================
-elif menu_selection == "Laboratoire & Outils":
-    st.title("Laboratoire de Recherche")
-    st.markdown("#### REMONTER LE TEMPS (DCA Backtest)")
+elif menu_selection == "Simulateur DCA":
+    st.title("Simulateur DCA (Backtest)")
+    st.markdown("#### REMONTER LE TEMPS")
     st.info("Stratégie : Dollar Cost Averaging. Investir une somme fixe chaque mois, peu importe le prix.")
     
     c1, c2, c3 = st.columns(3)
@@ -440,7 +441,7 @@ elif menu_selection == "Laboratoire & Outils":
             st.error("Données introuvables pour cet actif.")
 
 # ==============================================================================
-# PAGE 5 : CALCULATEUR INFLATION (NOUVEAU)
+# PAGE 5 : CALCULATEUR INFLATION (ONGLET SÉPARÉ 2)
 # ==============================================================================
 elif menu_selection == "Calculateur Inflation":
     st.title("Calculateur de Pouvoir d'Achat")
@@ -463,7 +464,6 @@ elif menu_selection == "Calculateur Inflation":
         st.metric("Perte de valeur", f"-{perte:,.0f} €", delta_color="inverse")
     
     with col_inf2:
-        # Graphique Décroissance
         years = list(range(horizon + 1))
         vals = [somme_actuelle / ((1 + inflation_moy) ** y) for y in years]
         fig_inf = px.area(x=years, y=vals, labels={'x':'Années', 'y':'Pouvoir d\'Achat (€)'})
