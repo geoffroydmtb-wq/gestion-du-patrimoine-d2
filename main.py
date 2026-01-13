@@ -39,7 +39,7 @@ st.markdown("""
     h4, h5 { color: #A0A0A0 !important; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; }
 
     /* CARDS */
-    div[data-testid="metric-container"], .news-card, .macro-card {
+    div[data-testid="metric-container"], .news-card, .macro-card, .lab-card {
         background-color: #161A25;
         border: 1px solid #252A38;
         padding: 15px;
@@ -47,7 +47,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         transition: all 0.2s;
     }
-    div[data-testid="metric-container"]:hover, .news-card:hover, .macro-card:hover {
+    div[data-testid="metric-container"]:hover, .news-card:hover, .lab-card:hover {
         border-color: #D4AF37;
     }
     
@@ -132,38 +132,19 @@ def get_macro_data():
         return macro_info
     except: return {}
 
-@st.cache_data(ttl=86400) # Cache 24h pour les fondamentaux
+@st.cache_data(ttl=86400)
 def get_fundamentals(tickers):
-    """Récupère PER, Yield, Secteur pour chaque ticker"""
     infos = []
     for t in tickers:
         try:
             ticker_obj = yf.Ticker(t)
-            # info = ticker_obj.info # Parfois lent
-            # On simule ou on tente une récupération rapide.
-            # Pour l'exemple robuste, on fait un try/except précis
-            i = ticker_obj.fast_info
-            
-            # Note: fast_info est plus rapide mais moins complet. 
-            # Si on veut le PER/Sector, il faut souvent .info qui est lent.
-            # On va utiliser .info mais avec parcimonie.
             dat = ticker_obj.info 
-            
             sector = dat.get('sector', 'N/A')
             per = dat.get('trailingPE', None)
             div = dat.get('dividendYield', None)
-            
-            # Formatage
             per_str = f"{per:.1f}" if per else "-"
             div_str = f"{div*100:.2f}%" if div else "-"
-            
-            infos.append({
-                "Actif": t,
-                "Nom": dat.get('shortName', t),
-                "Secteur": sector,
-                "PER (Cherté)": per_str,
-                "Dividende": div_str
-            })
+            infos.append({ "Actif": t, "Nom": dat.get('shortName', t), "Secteur": sector, "PER (Cherté)": per_str, "Dividende": div_str })
         except:
             infos.append({"Actif": t, "Nom": "-", "Secteur": "-", "PER (Cherté)": "-", "Dividende": "-"})
     return pd.DataFrame(infos)
@@ -191,7 +172,6 @@ def run_monte_carlo_simulation(df_prices, num_portfolios=2000):
     num_assets = len(df_prices.columns)
     results = np.zeros((3, num_portfolios))
     weights_record = []
-    
     for i in range(num_portfolios):
         weights = np.random.random(num_assets)
         weights /= np.sum(weights)
@@ -201,23 +181,54 @@ def run_monte_carlo_simulation(df_prices, num_portfolios=2000):
         results[0,i] = p_ret
         results[1,i] = p_std
         results[2,i] = p_ret / p_std
-        
     return results, weights_record
+
+def simulate_dca(ticker, monthly_amount, years):
+    start_date = datetime.now() - timedelta(days=years*365)
+    data = get_stock_data_optimized([ticker], start_date, datetime.now())
+    if data.empty: return None
+    monthly_data = data.resample('M').last()
+    total_invested = 0
+    total_shares = 0
+    history_val = []
+    history_invest = []
+    dates = []
+    for date, price in monthly_data.itertuples():
+        if pd.isna(price): continue
+        shares_bought = monthly_amount / price
+        total_shares += shares_bought
+        total_invested += monthly_amount
+        current_value = total_shares * price
+        dates.append(date)
+        history_val.append(current_value)
+        history_invest.append(total_invested)
+    return pd.DataFrame({'Date': dates, 'Valeur Portefeuille': history_val, 'Total Investi': history_invest})
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### WEALTH MANAGER")
     st.markdown("---")
-    menu_selection = st.radio("NAVIGATION", ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"], label_visibility="collapsed")
+    # MENU MIS À JOUR AVEC LE NOUVEL ONGLET
+    menu_selection = st.radio(
+        "NAVIGATION", 
+        [
+            "Tableau de Bord", 
+            "Marchés & Analyse", 
+            "Transactions", 
+            "Laboratoire & Outils", 
+            "Calculateur Inflation", # NOUVEL ONGLET ICI
+            "Actualités & Infos"
+        ], 
+        label_visibility="collapsed"
+    )
     st.markdown("---")
-    st.caption("v3.0 • Ultimate Edition")
+    st.caption("v4.1 • Inflation Tab")
 
 # ==============================================================================
-# PAGE 1 : TABLEAU DE BORD (AVEC CALCULATEUR RENTE)
+# PAGE 1 : TABLEAU DE BORD
 # ==============================================================================
 if menu_selection == "Tableau de Bord":
     st.title("Synthèse & Rente Future")
-    
     with st.expander("📝 Mettre à jour mes soldes", expanded=True):
         c1, c2, c3 = st.columns(3)
         livret_a = c1.number_input("Liquidités (€)", value=10000.0, step=100.0)
@@ -225,7 +236,6 @@ if menu_selection == "Tableau de Bord":
         crypto = c3.number_input("Crypto (€)", value=1000.0, step=100.0)
     
     total_wealth = livret_a + bourse + crypto
-    
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     c1.metric("Valeur Nette", f"{total_wealth:,.0f} €")
@@ -245,41 +255,33 @@ if menu_selection == "Tableau de Bord":
         c_a, c_b, c_c = st.columns(3)
         apport = c_a.number_input("Apport/mois (€)", value=500.0)
         taux = c_b.slider("Rendement Moyen (%)", 0, 15, 7) / 100
-        yield_target = c_c.slider("Yield Dividende (%)", 0, 8, 3) / 100 # Pour calculer la rente
+        yield_target = c_c.slider("Yield Dividende (%)", 0, 8, 3) / 100
         
-        # Calcul Projection
         annees = 20
         valeurs = [total_wealth]
-        rentes = [total_wealth * yield_target / 12] # Rente mensuelle
-        
+        rentes = [total_wealth * yield_target / 12]
         for _ in range(annees):
             nouveau_cap = valeurs[-1] * (1 + taux) + (apport * 12)
             valeurs.append(nouveau_cap)
             rentes.append(nouveau_cap * yield_target / 12)
-            
         df_proj = pd.DataFrame({'Année': range(annees + 1), 'Capital': valeurs, 'Rente Mensuelle': rentes})
         
-        # Double graph (Capital et Rente)
         tab_cap, tab_rente = st.tabs(["💰 CAPITAL TOTAL", "🏖️ RENTE MENSUELLE"])
-        
         with tab_cap:
             fig_area = px.area(df_proj, x='Année', y='Capital')
             fig_area.update_traces(line_color='#D4AF37', fillcolor='rgba(212, 175, 55, 0.1)')
             st.plotly_chart(style_plotly(fig_area), use_container_width=True)
             st.caption(f"Capital estimé dans {annees} ans : **{valeurs[-1]:,.0f} €**")
-            
         with tab_rente:
             fig_bar = px.bar(df_proj, x='Année', y='Rente Mensuelle')
             fig_bar.update_traces(marker_color='#FAFAFA')
             st.plotly_chart(style_plotly(fig_bar), use_container_width=True)
-            st.caption(f"Rente passive potentielle : **{rentes[-1]:,.0f} € / mois** (basé sur {yield_target*100}% de dividendes)")
-
+            st.caption(f"Rente passive potentielle : **{rentes[-1]:,.0f} € / mois**")
 
 # ==============================================================================
-# PAGE 2 : MARCHÉS & ANALYSE (AVEC FONDAMENTAUX + VaR)
+# PAGE 2 : MARCHÉS & ANALYSE
 # ==============================================================================
 elif menu_selection == "Marchés & Analyse":
-    
     st.markdown("### INDICATEURS MACRO-ÉCONOMIQUES")
     macro_data = get_macro_data()
     if macro_data:
@@ -308,21 +310,16 @@ elif menu_selection == "Marchés & Analyse":
         start_date = st.date_input("Depuis", value=datetime.now() - timedelta(days=365*2))
 
     if tickers:
-        
-        # --- BLOC FONDAMENTAUX (NOUVEAU) ---
         st.markdown("#### 🔎 FICHES FONDAMENTALES")
         with st.spinner("Analyse des entreprises..."):
             df_fund = get_fundamentals(tickers)
             st.dataframe(df_fund, use_container_width=True, hide_index=True)
-        # -----------------------------------
 
         with st.spinner('Calculs techniques...'):
             df_prices = get_stock_data_optimized(tickers, start_date, datetime.now())
         
         if not df_prices.empty:
-            
             tab_alloc, tab_optim = st.tabs(["📊 ALLOCATION MANUELLE", "🧠 OPTIMISATION MARKOWITZ"])
-            
             with tab_alloc:
                 st.markdown("#### ALLOCATION")
                 cols = st.columns(4)
@@ -332,7 +329,6 @@ elif menu_selection == "Marchés & Analyse":
                     label = get_readable_name(t)
                     with cols[i % 4]: weights.append(st.number_input(label, 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
                 
-                # --- CALCULS ---
                 df_norm = (df_prices / df_prices.iloc[0]) * 100
                 returns = df_prices.pct_change().dropna()
                 portf_ret = returns.dot(weights)
@@ -340,7 +336,6 @@ elif menu_selection == "Marchés & Analyse":
                 df_final = df_norm.copy()
                 df_final['PORTFOLIO'] = portf_cum.fillna(100)
                 
-                # Benchmark SPY
                 try:
                     bench = get_stock_data_optimized(['SPY'], start_date, datetime.now())
                     if not bench.empty: df_final['S&P 500'] = (bench / bench.iloc[0]) * 100
@@ -349,24 +344,19 @@ elif menu_selection == "Marchés & Analyse":
                 colors = ["#D4AF37" if c == "PORTFOLIO" else "#FAFAFA" if c == "S&P 500" else "#333333" for c in df_final.columns]
                 st.line_chart(df_final, color=colors)
                 
-                # --- MÉTRIQUES AVANCÉES (AVEC VaR) ---
                 c_m1, c_m2, c_m3 = st.columns(3)
-                
-                # Calcul VaR Historique (95%)
-                var_95 = np.percentile(portf_ret, 5) # 5eme centile
-                
+                var_95 = np.percentile(portf_ret, 5)
                 from logic.metrics import calculate_key_metrics, get_correlation_matrix
                 with c_m1:
                     st.markdown("#### RISQUE (Sharpe/Vol)")
                     st.dataframe(calculate_key_metrics(pd.DataFrame({'Portfolio': df_final['PORTFOLIO']})).T.style.format("{:.2f}"))
                 with c_m2:
                      st.markdown("#### VALUE AT RISK (95%)")
-                     st.metric("VaR (1 jour)", f"{var_95:.2%}", "Risque de perte max (conf. 95%)")
-                     st.caption("Cela signifie qu'il y a 5% de chances que votre portefeuille perde plus que ce montant en une journée.")
+                     st.metric("VaR (1 jour)", f"{var_95:.2%}", "Risque Perte Max")
                 with c_m3: 
                     st.markdown("#### CORRÉLATION")
                     corr = get_correlation_matrix(df_prices)
-                    corr.index = [t.split('(')[0] for t in corr.index] # Short names
+                    corr.index = [t.split('(')[0] for t in corr.index]
                     corr.columns = [t.split('(')[0] for t in corr.columns]
                     st.dataframe(corr.style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
             
@@ -380,7 +370,6 @@ elif menu_selection == "Marchés & Analyse":
                     fig.add_trace(go.Scatter(x=[results[1, max_idx]], y=[results[0, max_idx]], mode='markers', marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')), name='Optimal'))
                     fig.update_layout(title='Frontière Efficiente', xaxis_title='Volatilité', yaxis_title='Rendement', font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
-                    
                     full_names = [get_readable_name(t) for t in df_prices.columns]
                     opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': weights_record[max_idx]})
                     opt_df['Poids Idéal'] = opt_df['Poids Idéal'].apply(lambda x: f"{x*100:.2f}%")
@@ -415,7 +404,75 @@ elif menu_selection == "Transactions":
     st.dataframe(st.session_state.journal_ordres, use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# PAGE 4 : ACTUALITÉS
+# PAGE 4 : LABORATOIRE & OUTILS
+# ==============================================================================
+elif menu_selection == "Laboratoire & Outils":
+    st.title("Laboratoire de Recherche")
+    st.markdown("#### REMONTER LE TEMPS (DCA Backtest)")
+    st.info("Stratégie : Dollar Cost Averaging. Investir une somme fixe chaque mois, peu importe le prix.")
+    
+    c1, c2, c3 = st.columns(3)
+    sim_ticker = c1.text_input("Actif à tester", value="SPY")
+    sim_amount = c2.number_input("Investissement Mensuel (€)", value=200)
+    sim_years = c3.slider("Durée (Années)", 3, 20, 10)
+    
+    if st.button("Lancer la Simulation DCA"):
+        with st.spinner("Voyage dans le temps..."):
+            df_dca = simulate_dca(sim_ticker, sim_amount, sim_years)
+        
+        if df_dca is not None:
+            final_val = df_dca['Valeur Portefeuille'].iloc[-1]
+            total_inv = df_dca['Total Investi'].iloc[-1]
+            plus_value = final_val - total_inv
+            perf = (plus_value / total_inv) * 100
+            
+            col_res1, col_res2, col_res3 = st.columns(3)
+            col_res1.metric("Total Investi", f"{total_inv:,.0f} €")
+            col_res2.metric("Valeur Finale", f"{final_val:,.0f} €", f"{perf:+.2f}%")
+            col_res3.metric("Gain", f"{plus_value:,.0f} €")
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df_dca['Date'], y=df_dca['Total Investi'], fill='tozeroy', name='Argent Sorti', line=dict(color='#444444')))
+            fig.add_trace(go.Scatter(x=df_dca['Date'], y=df_dca['Valeur Portefeuille'], fill='tonexty', name='Valeur Réelle', line=dict(color='#D4AF37')))
+            fig.update_layout(title=f"Simulation DCA sur {sim_ticker}", font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("Données introuvables pour cet actif.")
+
+# ==============================================================================
+# PAGE 5 : CALCULATEUR INFLATION (NOUVEAU)
+# ==============================================================================
+elif menu_selection == "Calculateur Inflation":
+    st.title("Calculateur de Pouvoir d'Achat")
+    st.markdown("L'inflation est l'ennemi invisible de l'épargnant. Visualisez la perte de valeur de votre argent au fil du temps.")
+    st.markdown("---")
+    
+    ci1, ci2, ci3 = st.columns(3)
+    somme_actuelle = ci1.number_input("Somme actuelle (€)", value=10000)
+    horizon = ci2.slider("Horizon (Années)", 1, 40, 20)
+    inflation_moy = ci3.slider("Inflation Moyenne (%)", 0.0, 10.0, 2.5) / 100
+    
+    valeur_future = somme_actuelle / ((1 + inflation_moy) ** horizon)
+    perte = somme_actuelle - valeur_future
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_inf1, col_inf2 = st.columns(2)
+    
+    with col_inf1:
+        st.metric("Pouvoir d'achat réel final", f"{valeur_future:,.0f} €")
+        st.metric("Perte de valeur", f"-{perte:,.0f} €", delta_color="inverse")
+    
+    with col_inf2:
+        # Graphique Décroissance
+        years = list(range(horizon + 1))
+        vals = [somme_actuelle / ((1 + inflation_moy) ** y) for y in years]
+        fig_inf = px.area(x=years, y=vals, labels={'x':'Années', 'y':'Pouvoir d\'Achat (€)'})
+        fig_inf.update_traces(line_color='#FF4B4B', fillcolor='rgba(255, 75, 75, 0.2)')
+        fig_inf.update_layout(title="Érosion monétaire", font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_inf, use_container_width=True)
+
+# ==============================================================================
+# PAGE 6 : ACTUALITÉS
 # ==============================================================================
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
