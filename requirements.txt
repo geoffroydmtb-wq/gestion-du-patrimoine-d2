@@ -4,3 +4,4 @@ plotly
 yfinance
 matplotlib
 feedparser
+requests
