@@ -95,6 +95,18 @@ except ImportError: CATALOGUE = {}
 
 # --- FONCTIONS UTILITAIRES ---
 
+def get_readable_name(ticker):
+    """Traduit 'AAPL' en 'AAPL (Apple Inc.)' pour l'affichage"""
+    if not CATALOGUE: return ticker
+    for cat in CATALOGUE.values():
+        for name, code in cat.items():
+            if code == ticker:
+                # Le nom dans le catalogue est souvent "Apple (AAPL)"
+                # On veut extraire juste "Apple"
+                clean_name = name.split(" (")[0]
+                return f"{ticker} ({clean_name})"
+    return ticker
+
 def style_plotly(fig):
     fig.update_layout(
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -108,78 +120,47 @@ def style_plotly(fig):
 
 @st.cache_data(ttl=3600)
 def get_macro_data():
-    """Récupère les indicateurs macro-économiques"""
-    tickers = {
-        "VIX (Peur)": "^VIX",
-        "Taux US 10Y": "^TNX",
-        "Or ($/oz)": "GC=F",
-        "Pétrole ($)": "CL=F",
-        "EUR/USD": "EURUSD=X"
-    }
+    tickers = { "VIX (Peur)": "^VIX", "Taux US 10Y": "^TNX", "Or ($/oz)": "GC=F", "Pétrole ($)": "CL=F", "EUR/USD": "EURUSD=X" }
     try:
         data = yf.download(list(tickers.values()), period="5d", progress=False)['Close']
         macro_info = {}
         for name, ticker in tickers.items():
             try:
-                # Gestion robuste des colonnes MultiIndex ou simple
-                if isinstance(data.columns, pd.MultiIndex):
-                    series = data[ticker]
-                elif ticker in data.columns:
-                    series = data[ticker]
-                else:
-                    # Cas où une seule colonne est retournée sans nom
-                    series = data.iloc[:, 0]
-
+                if isinstance(data.columns, pd.MultiIndex): series = data[ticker]
+                elif ticker in data.columns: series = data[ticker]
+                else: series = data.iloc[:, 0]
                 last = float(series.iloc[-1])
                 prev = float(series.iloc[-2])
                 delta = ((last - prev) / prev) * 100
                 macro_info[name] = (last, delta)
-            except:
-                macro_info[name] = (0.0, 0.0)
+            except: macro_info[name] = (0.0, 0.0)
         return macro_info
-    except:
-        return {}
+    except: return {}
 
-# --- FONCTION ROBUSTE CORRIGÉE POUR ÉVITER LE KEYERROR ---
 @st.cache_data
 def get_stock_data_optimized(tickers, start, end):
     if not tickers: return pd.DataFrame()
-    
     try:
-        # Téléchargement global
         df = yf.download(tickers, start=start, end=end, progress=False)
-    except Exception:
-        return pd.DataFrame()
-
+    except Exception: return pd.DataFrame()
     if df.empty: return pd.DataFrame()
-
-    # Choix de la colonne de prix
+    
     target_col = 'Adj Close'
     if target_col not in df.columns:
-        if 'Close' in df.columns:
-            target_col = 'Close'
-        else:
-            return pd.DataFrame() # Pas de données de prix
+        if 'Close' in df.columns: target_col = 'Close'
+        else: return pd.DataFrame()
 
     data = df[target_col]
-    
-    # Correction si un seul ticker est demandé (yfinance renvoie parfois une Series)
     if len(tickers) == 1:
-        if isinstance(data, pd.Series):
-            data = data.to_frame()
-            data.columns = tickers
-        elif isinstance(data, pd.DataFrame) and data.shape[1] == 1:
-            data.columns = tickers
-            
+        if isinstance(data, pd.Series): data = data.to_frame(); data.columns = tickers
+        elif isinstance(data, pd.DataFrame) and data.shape[1] == 1: data.columns = tickers
     return data
 
 def run_monte_carlo_simulation(df_prices, num_portfolios=2000):
-    """Simule des milliers de portefeuilles pour Markowitz"""
     returns = df_prices.pct_change().dropna()
     mean_returns = returns.mean() * 252
     cov_matrix = returns.cov() * 252
     num_assets = len(df_prices.columns)
-    
     results = np.zeros((3, num_portfolios))
     weights_record = []
     
@@ -187,13 +168,11 @@ def run_monte_carlo_simulation(df_prices, num_portfolios=2000):
         weights = np.random.random(num_assets)
         weights /= np.sum(weights)
         weights_record.append(weights)
-        
-        portfolio_return = np.sum(mean_returns * weights)
-        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        
-        results[0,i] = portfolio_return
-        results[1,i] = portfolio_std_dev
-        results[2,i] = results[0,i] / results[1,i]
+        p_ret = np.sum(mean_returns * weights)
+        p_std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        results[0,i] = p_ret
+        results[1,i] = p_std
+        results[2,i] = p_ret / p_std
         
     return results, weights_record
 
@@ -203,14 +182,13 @@ with st.sidebar:
     st.markdown("---")
     menu_selection = st.radio("NAVIGATION", ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"], label_visibility="collapsed")
     st.markdown("---")
-    st.caption("v2.1 • Stable Release")
+    st.caption("v2.2 • Clear Names")
 
 # ==============================================================================
 # PAGE 1 : TABLEAU DE BORD
 # ==============================================================================
 if menu_selection == "Tableau de Bord":
     st.title("Synthèse Patrimoniale")
-    
     with st.expander("📝 Mettre à jour mes soldes", expanded=True):
         c1, c2, c3 = st.columns(3)
         livret_a = c1.number_input("Liquidités (€)", value=10000.0, step=100.0)
@@ -218,7 +196,6 @@ if menu_selection == "Tableau de Bord":
         crypto = c3.number_input("Crypto (€)", value=1000.0, step=100.0)
     
     total_wealth = livret_a + bourse + crypto
-    
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     c1.metric("Valeur Nette", f"{total_wealth:,.0f} €")
@@ -229,11 +206,10 @@ if menu_selection == "Tableau de Bord":
     c_chart1, c_chart2 = st.columns([1, 2])
     with c_chart1:
         st.markdown("#### RÉPARTITION")
-        if total_wealth > 0:
-            fig = px.pie(values=[livret_a, bourse, crypto], names=['Liquidités', 'Bourse', 'Crypto'], hole=0.7, color_discrete_sequence=['#333333', '#D4AF37', '#FAFAFA'])
-            fig.update_traces(textinfo='none')
-            fig.update_layout(showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2))
-            st.plotly_chart(style_plotly(fig), use_container_width=True)
+        fig = px.pie(values=[livret_a, bourse, crypto], names=['Liquidités', 'Bourse', 'Crypto'], hole=0.7, color_discrete_sequence=['#333333', '#D4AF37', '#FAFAFA'])
+        fig.update_traces(textinfo='none')
+        fig.update_layout(showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2))
+        st.plotly_chart(style_plotly(fig), use_container_width=True)
     with c_chart2:
         st.markdown("#### PROJECTION")
         c_a, c_b = st.columns(2)
@@ -251,15 +227,13 @@ if menu_selection == "Tableau de Bord":
 # ==============================================================================
 elif menu_selection == "Marchés & Analyse":
     
-    # 1. MACRO DASHBOARD
     st.markdown("### INDICATEURS MACRO-ÉCONOMIQUES")
     macro_data = get_macro_data()
     if macro_data:
         cols_macro = st.columns(len(macro_data))
         for i, (name, (val, delta)) in enumerate(macro_data.items()):
             cols_macro[i].metric(name, f"{val:.2f}", f"{delta:+.2f}%")
-    else:
-        st.info("Chargement des indicateurs macro...")
+    else: st.info("Chargement macro...")
     
     st.markdown("---")
     st.title("Analyse de Portefeuille")
@@ -288,14 +262,15 @@ elif menu_selection == "Marchés & Analyse":
             
             tab_alloc, tab_optim = st.tabs(["📊 ALLOCATION MANUELLE", "🧠 OPTIMISATION MARKOWITZ"])
             
-            # --- TAB 1: CLASSIQUE ---
             with tab_alloc:
                 st.markdown("#### ALLOCATION")
                 cols = st.columns(4)
                 weights = []
                 found = df_prices.columns.tolist()
                 for i, t in enumerate(found):
-                    with cols[i % 4]: weights.append(st.number_input(f"{t}", 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
+                    # NOUVEAU : On utilise get_readable_name pour l'affichage
+                    label = get_readable_name(t)
+                    with cols[i % 4]: weights.append(st.number_input(label, 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
                 
                 use_benchmark = st.checkbox("Comparer au S&P 500 (SPY)", value=True)
                 
@@ -313,12 +288,7 @@ elif menu_selection == "Marchés & Analyse":
                             df_final['S&P 500'] = bench_norm
                     except: pass
                 
-                colors = []
-                for c in df_final.columns:
-                    if c == "PORTFOLIO": colors.append("#D4AF37")
-                    elif c == "S&P 500": colors.append("#FAFAFA")
-                    else: colors.append("#333333")
-                
+                colors = ["#D4AF37" if c == "PORTFOLIO" else "#FAFAFA" if c == "S&P 500" else "#333333" for c in df_final.columns]
                 st.line_chart(df_final, color=colors)
                 
                 c_m1, c_m2 = st.columns(2)
@@ -328,40 +298,30 @@ elif menu_selection == "Marchés & Analyse":
                     st.dataframe(calculate_key_metrics(pd.DataFrame({'Portfolio': df_final['PORTFOLIO']})).T.style.format("{:.2f}"))
                 with c_m2: 
                     st.markdown("#### CORRÉLATION")
-                    st.dataframe(get_correlation_matrix(df_prices).style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
+                    # NOUVEAU : On renomme les colonnes et index pour l'affichage
+                    corr = get_correlation_matrix(df_prices)
+                    corr.index = [get_readable_name(t) for t in corr.index]
+                    corr.columns = [get_readable_name(t) for t in corr.columns]
+                    st.dataframe(corr.style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
             
-            # --- TAB 2: MARKOWITZ ---
             with tab_optim:
                 st.markdown("#### FRONTIÈRE EFFICIENTE (MONTE CARLO)")
-                st.info("Simulation de 2 000 portefeuilles aléatoires pour trouver le couple Risque/Rendement optimal.")
-                
                 if st.button("Lancer l'Optimisation"):
                     results, weights_record = run_monte_carlo_simulation(df_prices)
-                    
                     max_sharpe_idx = np.argmax(results[2])
                     sdp, rp = results[1, max_sharpe_idx], results[0, max_sharpe_idx]
                     best_weights = weights_record[max_sharpe_idx]
                     
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=results[1,:], y=results[0,:], mode='markers',
-                        marker=dict(color=results[2,:], colorscale='Cividis', showscale=True, size=5),
-                        name='Portefeuilles simulés'
-                    ))
-                    fig.add_trace(go.Scatter(
-                        x=[sdp], y=[rp], mode='markers',
-                        marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')),
-                        name='Max Sharpe Ratio'
-                    ))
-                    fig.update_layout(
-                        title='Frontière Efficiente',
-                        xaxis_title='Volatilité (Risque)', yaxis_title='Rendement Espéré',
-                        font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
-                    )
+                    fig.add_trace(go.Scatter(x=results[1,:], y=results[0,:], mode='markers', marker=dict(color=results[2,:], colorscale='Cividis', size=5), name='Portefeuilles'))
+                    fig.add_trace(go.Scatter(x=[sdp], y=[rp], mode='markers', marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')), name='Max Sharpe'))
+                    fig.update_layout(title='Frontière Efficiente', xaxis_title='Volatilité', yaxis_title='Rendement', font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    st.markdown("#### ALLOCATION OPTIMALE SUGGÉRÉE")
-                    opt_df = pd.DataFrame({'Actif': df_prices.columns, 'Poids Idéal': best_weights})
+                    st.markdown("#### ALLOCATION OPTIMALE")
+                    # NOUVEAU : Noms complets dans le tableau d'optimisation
+                    full_names = [get_readable_name(t) for t in df_prices.columns]
+                    opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': best_weights})
                     opt_df['Poids Idéal'] = opt_df['Poids Idéal'].apply(lambda x: f"{x*100:.2f}%")
                     st.dataframe(opt_df.T)
 
@@ -371,9 +331,8 @@ elif menu_selection == "Marchés & Analyse":
 elif menu_selection == "Transactions":
     st.title("Journal des Transactions")
     c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("💾 Sauvegarder CSV", data=st.session_state.journal_ordres.to_csv(index=False).encode('utf-8'), file_name="journal.csv", mime="text/csv")
-    with c2:
+    with c1: st.download_button("💾 Sauvegarder CSV", data=st.session_state.journal_ordres.to_csv(index=False).encode('utf-8'), file_name="journal.csv", mime="text/csv")
+    with c2: 
         up = st.file_uploader("📂 Charger CSV", type=['csv'], label_visibility="collapsed")
         if up: st.session_state.journal_ordres = pd.read_csv(up); st.success("Chargé !")
 
@@ -399,7 +358,6 @@ elif menu_selection == "Transactions":
 # ==============================================================================
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
-    
     RSS_FEEDS = {
         "🌍 Général (Les Echos)": "https://services.lesechos.fr/rss/une.xml",
         "📈 Bourse (Boursorama)": "https://www.boursorama.com/rss/actualites/economie",
@@ -416,12 +374,7 @@ elif menu_selection == "Actualités & Infos":
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
                 for entry in feed.entries[:8]:
-                    news_list.append({
-                        "title": entry.title,
-                        "link": entry.link,
-                        "published": entry.get("published", entry.get("updated", "")),
-                        "summary": entry.get("summary", "Lire l'article...")[:180] + "..."
-                    })
+                    news_list.append({ "title": entry.title, "link": entry.link, "published": entry.get("published", entry.get("updated", "")), "summary": entry.get("summary", "Lire l'article...")[:180] + "..." })
         except: pass
         return news_list
 
@@ -434,14 +387,5 @@ elif menu_selection == "Actualités & Infos":
             col1, col2 = st.columns(2)
             for i, item in enumerate(news_items):
                 with col1 if i % 2 == 0 else col2:
-                    st.markdown(f"""
-                    <div class="news-card">
-                        <div class="news-title">{item['title']}</div>
-                        <div class="news-date">{item['published']}</div>
-                        <div class="news-summary">{item['summary']}</div>
-                        <br>
-                        <a href="{item['link']}" target="_blank" class="news-link">Lire l'article complet →</a>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.warning("Aucune info disponible.")
+                    st.markdown(f"""<div class="news-card"><div class="news-title">{item['title']}</div><div class="news-date">{item['published']}</div><div class="news-summary">{item['summary']}</div><br><a href="{item['link']}" target="_blank" class="news-link">Lire l'article complet →</a></div>""", unsafe_allow_html=True)
+        else: st.warning("Aucune info disponible.")
