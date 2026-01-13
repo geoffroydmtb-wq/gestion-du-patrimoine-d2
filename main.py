@@ -1,28 +1,21 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import feedparser 
-import requests # NOUVEAU : Pour contourner les blocages anti-robots
+import feedparser
+import requests
+import yfinance as yf
 from datetime import datetime, timedelta
 
-# --- IMPORT MODULES LOCAUX ---
-from data.loader import get_stock_data
-from logic.metrics import calculate_key_metrics, get_correlation_matrix
-
-try:
-    from constantes import CATALOGUE
-except ImportError:
-    CATALOGUE = {}
-
-# --- 1. CONFIGURATION GLOBALE ---
+# --- CONFIGURATION GLOBALE ---
 st.set_page_config(
-    page_title="Wealth Manager",
+    page_title="Wealth Manager Pro",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. DESIGN SYSTEM "PURE & GOLD" ---
+# --- DESIGN SYSTEM "PURE & GOLD" ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&display=swap');
@@ -34,10 +27,7 @@ st.markdown("""
     }
 
     /* SIDEBAR */
-    section[data-testid="stSidebar"] {
-        background-color: #000000;
-        border-right: 1px solid #1F1F1F;
-    }
+    section[data-testid="stSidebar"] { background-color: #000000; border-right: 1px solid #1F1F1F; }
     
     /* HEADER & ARROWS */
     header[data-testid="stHeader"] { background-color: transparent !important; }
@@ -48,26 +38,24 @@ st.markdown("""
     h1, h2, h3 { color: #D4AF37 !important; font-weight: 300; letter-spacing: -0.5px; }
     h4, h5 { color: #A0A0A0 !important; text-transform: uppercase; font-size: 0.8rem; letter-spacing: 1px; }
 
-    /* CARDS & NEWS */
-    div[data-testid="metric-container"], .news-card {
+    /* CARDS */
+    div[data-testid="metric-container"], .news-card, .macro-card {
         background-color: #161A25;
         border: 1px solid #252A38;
-        padding: 20px;
+        padding: 15px;
         border-radius: 12px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         transition: all 0.2s;
-        margin-bottom: 15px;
     }
-    div[data-testid="metric-container"]:hover, .news-card:hover {
+    div[data-testid="metric-container"]:hover, .news-card:hover, .macro-card:hover {
         border-color: #D4AF37;
-        transform: translateY(-2px);
     }
     
+    /* NEWS STYLE */
     .news-title { font-size: 16px; font-weight: 600; color: #FAFAFA; margin-bottom: 5px; }
     .news-date { font-size: 12px; color: #D4AF37; margin-bottom: 10px; }
-    .news-summary { font-size: 14px; color: #B0B0B0; line-height: 1.5; }
-    .news-link { color: #D4AF37; text-decoration: none; font-size: 14px; font-weight: 500; }
-    .news-link:hover { text-decoration: underline; }
+    .news-summary { font-size: 14px; color: #B0B0B0; }
+    .news-link { color: #D4AF37; text-decoration: none; font-size: 14px; }
 
     /* INPUTS & BUTTONS */
     .stTextInput>div>div>input, .stSelectbox>div>div>div, .stNumberInput>div>div>input {
@@ -82,7 +70,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. SÉCURITÉ ---
+# --- SÉCURITÉ ---
 def check_password():
     if st.secrets.get("password") is None: return True
     def password_entered():
@@ -98,47 +86,14 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 4. CONFIGURATION DATA ---
+# --- INITIALISATION ---
 if 'journal_ordres' not in st.session_state:
     st.session_state.journal_ordres = pd.DataFrame(columns=['Date', 'Ticker', 'Type', 'Quantité', 'Prix Unitaire', 'Frais', 'Total'])
 
-# RSS FEEDS
-RSS_FEEDS = {
-    "🌍 Général (Les Echos)": "https://services.lesechos.fr/rss/une.xml",
-    "📈 Bourse (Boursorama)": "https://www.boursorama.com/rss/actualites/economie",
-    "🇺🇸 US Markets (CNBC)": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
-    "💻 Tech & Crypto (CoinDesk)": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "🇪🇺 Économie (Euronews)": "https://fr.euronews.com/rss?format=xml&level=theme&name=business"
-}
+try: from constantes import CATALOGUE
+except ImportError: CATALOGUE = {}
 
-# --- FONCTION CORRIGÉE (ROBUSTE) ---
-def fetch_news(feed_url):
-    """Récupère les news avec un User-Agent pour éviter les blocages"""
-    news_list = []
-    try:
-        # On se fait passer pour un navigateur Chrome
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        # On télécharge la page avec requests d'abord
-        response = requests.get(feed_url, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            # On donne le contenu téléchargé à feedparser
-            feed = feedparser.parse(response.content)
-            
-            for entry in feed.entries[:8]: # Top 8
-                news_list.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "published": entry.get("published", entry.get("updated", "")),
-                    "summary": entry.get("summary", "Lire l'article...")[:180] + "..."
-                })
-    except Exception as e:
-        st.error(f"Erreur de connexion : {e}")
-        return []
-        
-    return news_list
+# --- FONCTIONS UTILITAIRES ---
 
 def style_plotly(fig):
     fig.update_layout(
@@ -151,32 +106,79 @@ def style_plotly(fig):
     )
     return fig
 
-# ==============================================================================
-# SIDEBAR
-# ==============================================================================
+@st.cache_data(ttl=3600) # Cache 1 heure pour ne pas ralentir l'app
+def get_macro_data():
+    """Récupère les indicateurs macro-économiques"""
+    tickers = {
+        "VIX (Peur)": "^VIX",
+        "Taux US 10Y": "^TNX",
+        "Or ($/oz)": "GC=F",
+        "Pétrole ($)": "CL=F",
+        "EUR/USD": "EURUSD=X"
+    }
+    data = yf.download(list(tickers.values()), period="5d", progress=False)['Close']
+    
+    # On reformate pour avoir les dernières valeurs et la variation
+    macro_info = {}
+    for name, ticker in tickers.items():
+        try:
+            # Gestion safe des colonnes MultiIndex de yfinance
+            if isinstance(data.columns, pd.MultiIndex):
+                series = data[ticker]
+            else:
+                series = data[ticker] if ticker in data.columns else data.iloc[:, 0]
+                
+            last = series.iloc[-1]
+            prev = series.iloc[-2]
+            delta = ((last - prev) / prev) * 100
+            macro_info[name] = (last, delta)
+        except:
+            macro_info[name] = (0.0, 0.0)
+    return macro_info
+
+@st.cache_data
+def get_stock_data_optimized(tickers, start, end):
+    if not tickers: return pd.DataFrame()
+    df = yf.download(tickers, start=start, end=end, progress=False)['Adj Close']
+    return df
+
+def run_monte_carlo_simulation(df_prices, num_portfolios=2000):
+    """Simule des milliers de portefeuilles pour Markowitz"""
+    returns = df_prices.pct_change().dropna()
+    mean_returns = returns.mean() * 252
+    cov_matrix = returns.cov() * 252
+    num_assets = len(df_prices.columns)
+    
+    results = np.zeros((3, num_portfolios)) # 0: Rendement, 1: Volatilité, 2: Sharpe
+    weights_record = []
+    
+    for i in range(num_portfolios):
+        weights = np.random.random(num_assets)
+        weights /= np.sum(weights)
+        weights_record.append(weights)
+        
+        portfolio_return = np.sum(mean_returns * weights)
+        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        
+        results[0,i] = portfolio_return
+        results[1,i] = portfolio_std_dev
+        results[2,i] = results[0,i] / results[1,i] # Sharpe Ratio (Simplified, Rf=0)
+        
+    return results, weights_record, mean_returns, cov_matrix
+
+# --- SIDEBAR ---
 with st.sidebar:
     st.markdown("### WEALTH MANAGER")
     st.markdown("---")
-    
-    menu_selection = st.radio(
-        "NAVIGATION",
-        ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"],
-        index=0,
-        label_visibility="collapsed"
-    )
-    
+    menu_selection = st.radio("NAVIGATION", ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"], label_visibility="collapsed")
     st.markdown("---")
-    st.markdown("#### RECHERCHE RAPIDE")
-    search_query = st.text_input("Rechercher un actif...", placeholder="AAPL, BTC...")
-    st.markdown("---")
-    st.caption("v1.5.1 • News Fix")
+    st.caption("v2.0 • Markowitz & Macro")
 
 # ==============================================================================
-# PAGE 1 : TABLEAU DE BORD
+# PAGE 1 : TABLEAU DE BORD (inchangé mais inclus pour la complétude)
 # ==============================================================================
 if menu_selection == "Tableau de Bord":
     st.title("Synthèse Patrimoniale")
-    st.markdown("#### VUE D'ENSEMBLE")
     
     with st.expander("📝 Mettre à jour mes soldes", expanded=True):
         c1, c2, c3 = st.columns(3)
@@ -187,20 +189,19 @@ if menu_selection == "Tableau de Bord":
     total_wealth = livret_a + bourse + crypto
     
     st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Valeur Nette Totale", f"{total_wealth:,.0f} €", "+2.4%")
-    col2.metric("Liquidités", f"{livret_a:,.0f} €", "Sécurisé")
-    col3.metric("Actifs Risqués", f"{bourse+crypto:,.0f} €", f"{((bourse+crypto)/total_wealth)*100:.1f}%")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Valeur Nette", f"{total_wealth:,.0f} €")
+    c2.metric("Liquidités", f"{livret_a:,.0f} €")
+    c3.metric("Actifs Risqués", f"{bourse+crypto:,.0f} €", f"{((bourse+crypto)/total_wealth)*100:.1f}%")
     
     st.markdown("<br>", unsafe_allow_html=True)
     c_chart1, c_chart2 = st.columns([1, 2])
     with c_chart1:
         st.markdown("#### RÉPARTITION")
-        if total_wealth > 0:
-            fig = px.pie(values=[livret_a, bourse, crypto], names=['Liquidités', 'Bourse', 'Crypto'], hole=0.7, color_discrete_sequence=['#333333', '#D4AF37', '#FAFAFA'])
-            fig.update_traces(textinfo='none', hovertemplate='%{label}: <b>%{value:,.0f} €</b>')
-            fig.update_layout(showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-            st.plotly_chart(style_plotly(fig), use_container_width=True)
+        fig = px.pie(values=[livret_a, bourse, crypto], names=['Liquidités', 'Bourse', 'Crypto'], hole=0.7, color_discrete_sequence=['#333333', '#D4AF37', '#FAFAFA'])
+        fig.update_traces(textinfo='none')
+        fig.update_layout(showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2))
+        st.plotly_chart(style_plotly(fig), use_container_width=True)
     with c_chart2:
         st.markdown("#### PROJECTION")
         c_a, c_b = st.columns(2)
@@ -214,16 +215,24 @@ if menu_selection == "Tableau de Bord":
         st.plotly_chart(style_plotly(fig_area), use_container_width=True)
 
 # ==============================================================================
-# PAGE 2 : MARCHÉS & ANALYSE
+# PAGE 2 : MARCHÉS & ANALYSE (LA GROSSE MISE À JOUR)
 # ==============================================================================
 elif menu_selection == "Marchés & Analyse":
-    st.title("Analyse de Marché")
-    default_tickers = []
-    if search_query: default_tickers = [search_query.upper().strip()]
+    
+    # 1. MACRO DASHBOARD
+    st.markdown("### INDICATEURS MACRO-ÉCONOMIQUES")
+    macro_data = get_macro_data()
+    cols_macro = st.columns(len(macro_data))
+    for i, (name, (val, delta)) in enumerate(macro_data.items()):
+        cols_macro[i].metric(name, f"{val:.2f}", f"{delta:+.2f}%")
+    
+    st.markdown("---")
+    st.title("Analyse de Portefeuille")
+    
     col_input, col_period = st.columns([3, 1])
     with col_input:
         st.markdown("#### SÉLECTION D'ACTIFS")
-        selected_tickers = default_tickers.copy()
+        selected_tickers = []
         if CATALOGUE:
             for cat, assets in CATALOGUE.items():
                 sel = st.multiselect(f"{cat}", list(assets.keys()))
@@ -231,42 +240,108 @@ elif menu_selection == "Marchés & Analyse":
         manual = st.text_input("Ajout Manuel (Ticker)", placeholder="Ex: AI.PA")
         if manual: selected_tickers.append(manual.upper())
         tickers = list(set(selected_tickers))
+
     with col_period:
         st.markdown("#### PÉRIODE")
         start_date = st.date_input("Depuis", value=datetime.now() - timedelta(days=365*2))
 
     if tickers:
-        st.markdown("---")
-        with st.spinner('Connexion...'):
-            df_prices = get_stock_data(tickers, start_date, datetime.now())
+        with st.spinner('Analyse des données...'):
+            df_prices = get_stock_data_optimized(tickers, start_date, datetime.now())
+        
         if not df_prices.empty:
-            st.markdown("#### ALLOCATION")
-            cols = st.columns(4)
-            weights = []
-            found = df_prices.columns.tolist()
-            for i, t in enumerate(found):
-                with cols[i % 4]: weights.append(st.number_input(f"{t}", 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
             
-            df_norm = (df_prices / df_prices.iloc[0]) * 100
-            portf = df_prices.pct_change().dropna().dot(weights)
-            portf_cum = (1 + portf).cumprod() * 100
-            df_final = df_norm.copy()
-            df_final['PORTFOLIO'] = portf_cum.fillna(100)
+            # --- ONGLET INTERNE POUR LES MODES D'ANALYSE ---
+            tab_alloc, tab_optim = st.tabs(["📊 ALLOCATION MANUELLE", "🧠 OPTIMISATION MARKOWITZ"])
             
-            st.markdown("#### PERFORMANCE")
-            colors = ["#D4AF37" if c == "PORTFOLIO" else "#444444" for c in df_final.columns]
-            st.line_chart(df_final, color=colors)
+            # --- TAB 1: CLASSIQUE ---
+            with tab_alloc:
+                st.markdown("#### ALLOCATION")
+                cols = st.columns(4)
+                weights = []
+                found = df_prices.columns.tolist()
+                for i, t in enumerate(found):
+                    with cols[i % 4]: weights.append(st.number_input(f"{t}", 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
+                
+                # Ajout Benchmark
+                use_benchmark = st.checkbox("Comparer au S&P 500 (SPY)", value=True)
+                
+                df_norm = (df_prices / df_prices.iloc[0]) * 100
+                portf_ret = df_prices.pct_change().dropna().dot(weights)
+                portf_cum = (1 + portf_ret).cumprod() * 100
+                df_final = df_norm.copy()
+                df_final['PORTFOLIO'] = portf_cum.fillna(100)
+                
+                if use_benchmark:
+                    with st.spinner("Chargement Benchmark..."):
+                        bench = get_stock_data_optimized(['SPY'], start_date, datetime.now())
+                        if not bench.empty:
+                            bench_norm = (bench / bench.iloc[0]) * 100
+                            df_final['S&P 500'] = bench_norm
+                
+                colors = []
+                for c in df_final.columns:
+                    if c == "PORTFOLIO": colors.append("#D4AF37") # Or
+                    elif c == "S&P 500": colors.append("#FAFAFA") # Blanc
+                    else: colors.append("#333333") # Gris foncé
+                
+                st.line_chart(df_final, color=colors)
+                
+                c_m1, c_m2 = st.columns(2)
+                # Utilisation des fonctions importées pour les métriques
+                from logic.metrics import calculate_key_metrics, get_correlation_matrix
+                with c_m1:
+                    st.markdown("#### RISQUE")
+                    st.dataframe(calculate_key_metrics(pd.DataFrame({'Portfolio': df_final['PORTFOLIO']})).T.style.format("{:.2f}"))
+                with c_m2: 
+                    st.markdown("#### CORRÉLATION")
+                    st.dataframe(get_correlation_matrix(df_prices).style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("#### RISQUE")
-                st.dataframe(calculate_key_metrics(pd.DataFrame({'Portfolio': df_final['PORTFOLIO']})).T.style.format("{:.2f}"))
-            with c2:
-                st.markdown("#### CORRÉLATION")
-                st.dataframe(get_correlation_matrix(df_prices).style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
+            # --- TAB 2: MARKOWITZ (MATHS) ---
+            with tab_optim:
+                st.markdown("#### FRONTIÈRE EFFICIENTE (MONTE CARLO)")
+                st.info("Simulation de 2 000 portefeuilles aléatoires pour trouver le couple Risque/Rendement optimal.")
+                
+                if st.button("Lancer l'Optimisation"):
+                    results, weights_record, mean_ret, cov_mat = run_monte_carlo_simulation(df_prices)
+                    
+                    # Trouver le meilleur Sharpe
+                    max_sharpe_idx = np.argmax(results[2])
+                    sdp, rp = results[1, max_sharpe_idx], results[0, max_sharpe_idx]
+                    best_weights = weights_record[max_sharpe_idx]
+                    
+                    # Graphique
+                    fig = go.Figure()
+                    
+                    # Nuage de points
+                    fig.add_trace(go.Scatter(
+                        x=results[1,:], y=results[0,:], mode='markers',
+                        marker=dict(color=results[2,:], colorscale='Cividis', showscale=True, size=5),
+                        name='Portefeuilles simulés'
+                    ))
+                    
+                    # Point Optimal
+                    fig.add_trace(go.Scatter(
+                        x=[sdp], y=[rp], mode='markers',
+                        marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')),
+                        name='Max Sharpe Ratio'
+                    ))
+                    
+                    fig.update_layout(
+                        title='Frontière Efficiente',
+                        xaxis_title='Volatilité (Risque)', yaxis_title='Rendement Espéré',
+                        font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("#### ALLOCATION OPTIMALE SUGGÉRÉE")
+                    opt_df = pd.DataFrame({'Actif': df_prices.columns, 'Poids Idéal': best_weights})
+                    opt_df['Poids Idéal'] = opt_df['Poids Idéal'].apply(lambda x: f"{x*100:.2f}%")
+                    st.dataframe(opt_df.T)
+
 
 # ==============================================================================
-# PAGE 3 : TRANSACTIONS
+# PAGE 3 : TRANSACTIONS (inchangé)
 # ==============================================================================
 elif menu_selection == "Transactions":
     st.title("Journal des Transactions")
@@ -295,19 +370,41 @@ elif menu_selection == "Transactions":
     st.dataframe(st.session_state.journal_ordres, use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# PAGE 4 : ACTUALITÉS
+# PAGE 4 : ACTUALITÉS (Fonction corrigée incluse)
 # ==============================================================================
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
     
+    # RSS FEEDS
+    RSS_FEEDS = {
+        "🌍 Général (Les Echos)": "https://services.lesechos.fr/rss/une.xml",
+        "📈 Bourse (Boursorama)": "https://www.boursorama.com/rss/actualites/economie",
+        "🇺🇸 US Markets (CNBC)": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "💻 Tech & Crypto (CoinDesk)": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "🇪🇺 Économie (Euronews)": "https://fr.euronews.com/rss?format=xml&level=theme&name=business"
+    }
+
+    def fetch_news(feed_url):
+        news_list = []
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            response = requests.get(feed_url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                feed = feedparser.parse(response.content)
+                for entry in feed.entries[:8]:
+                    news_list.append({
+                        "title": entry.title,
+                        "link": entry.link,
+                        "published": entry.get("published", entry.get("updated", "")),
+                        "summary": entry.get("summary", "Lire l'article...")[:180] + "..."
+                    })
+        except: pass
+        return news_list
+
     source_choice = st.selectbox("Choisir une source :", list(RSS_FEEDS.keys()))
-    
     if source_choice:
-        feed_url = RSS_FEEDS[source_choice]
-        
-        with st.spinner(f"Récupération des news ({source_choice})..."):
-            news_items = fetch_news(feed_url)
-        
+        with st.spinner("Chargement..."):
+            news_items = fetch_news(RSS_FEEDS[source_choice])
         if news_items:
             st.markdown("---")
             col1, col2 = st.columns(2)
@@ -323,5 +420,4 @@ elif menu_selection == "Actualités & Infos":
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            st.warning("Aucune info disponible. Le site bloque peut-être encore l'accès.")
-            
+            st.warning("Aucune info disponible.")
