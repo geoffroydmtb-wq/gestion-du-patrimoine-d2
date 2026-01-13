@@ -249,14 +249,20 @@ def get_ai_response_gemini(user_prompt):
     Réponds de manière structurée et professionnelle.
     """
     
-    try:
-        # UTILISATION DU MODELE STABLE POUR EVITER ERREUR 404
-        model = genai.GenerativeModel('gemini-pro') 
-        full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
-        response = model.generate_content(full_prompt)
-        return response.text
-    except Exception as e:
-        return f"Erreur de connexion à l'IA : {str(e)}"
+    # --- FIX 8.0 : ON UTILISE LE MODELE LE PLUS RECENT ET STABLE ---
+    # On teste plusieurs modèles au cas où l'un n'est pas dispo
+    models_to_try = ['gemini-1.5-flash', 'gemini-pro']
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception:
+            continue # Si ça rate, on essaie le suivant
+
+    return "Erreur : Impossible de contacter Gemini avec les modèles disponibles. Vérifiez votre clé API."
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -268,7 +274,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v7.1 • Gemini Pro Fix")
+    st.caption("v8.0 • News & Fix")
 
 # ==============================================================================
 # PAGES 
@@ -471,22 +477,38 @@ elif menu_selection == "Calculateur Inflation":
     st.plotly_chart(fig, use_container_width=True)
 
 elif menu_selection == "Actualités & Infos":
-    st.title("Actualités")
-    RSS_FEEDS = { "🌍 Les Echos": "https://services.lesechos.fr/rss/une.xml", "📈 Boursorama": "https://www.boursorama.com/rss/actualites/economie", "🇺🇸 CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664" }
-    def fetch_news(url):
+    st.title("Actualités Financières")
+    # MISE À JOUR DES SOURCES AVEC PLUS DE CHOIX
+    RSS_FEEDS = {
+        "🇫🇷 Les Echos": "https://services.lesechos.fr/rss/une.xml",
+        "🇫🇷 Boursorama": "https://www.boursorama.com/rss/actualites/economie",
+        "🇫🇷 Le Revenu": "https://www.lerevenu.com/feed/",
+        "🇫🇷 Zonebourse": "https://www.zonebourse.com/rss/actualites.xml",
+        "🇺🇸 CNBC": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "🇺🇸 Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
+        "🇺🇸 WSJ Markets": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"
+    }
+
+    def fetch_news(feed_url):
+        news_list = []
         try:
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-            if r.status_code == 200:
-                f = feedparser.parse(r.content)
-                return [{"title": e.title, "link": e.link, "date": e.get("published", ""), "summary": e.get("summary", "")[:180]+"..."} for e in f.entries[:8]]
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            response = requests.get(feed_url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                feed = feedparser.parse(response.content)
+                for entry in feed.entries[:8]:
+                    news_list.append({ "title": entry.title, "link": entry.link, "published": entry.get("published", entry.get("updated", "")), "summary": entry.get("summary", "Lire l'article...")[:180] + "..." })
         except: pass
-        return []
-    
-    src = st.selectbox("Source", list(RSS_FEEDS.keys()))
-    if src:
-        items = fetch_news(RSS_FEEDS[src])
-        if items:
-            c1, c2 = st.columns(2)
-            for i, it in enumerate(items):
-                with c1 if i % 2 == 0 else c2:
-                    st.markdown(f"""<div class="news-card"><div class="news-title">{it['title']}</div><div class="news-date">{it['date']}</div><div class="news-summary">{it['summary']}</div><a href="{it['link']}" target="_blank" class="news-link">Lire →</a></div>""", unsafe_allow_html=True)
+        return news_list
+
+    source_choice = st.selectbox("Choisir une source :", list(RSS_FEEDS.keys()))
+    if source_choice:
+        with st.spinner("Chargement..."):
+            news_items = fetch_news(RSS_FEEDS[source_choice])
+        if news_items:
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            for i, item in enumerate(news_items):
+                with col1 if i % 2 == 0 else col2:
+                    st.markdown(f"""<div class="news-card"><div class="news-title">{item['title']}</div><div class="news-date">{item['published']}</div><div class="news-summary">{item['summary']}</div><br><a href="{item['link']}" target="_blank" class="news-link">Lire l'article complet →</a></div>""", unsafe_allow_html=True)
+        else: st.warning("Aucune info disponible.")
