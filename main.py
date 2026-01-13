@@ -250,7 +250,8 @@ def get_ai_response_gemini(user_prompt):
     """
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash') # Modèle rapide et gratuit
+        # --- FIX : UTILISATION DE GEMINI-PRO AU LIEU DE FLASH ---
+        model = genai.GenerativeModel('gemini-pro') 
         full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
         response = model.generate_content(full_prompt)
         return response.text
@@ -267,7 +268,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v7.0 • Gemini Inside")
+    st.caption("v7.1 • Gemini Pro Fix")
 
 # ==============================================================================
 # PAGES 
