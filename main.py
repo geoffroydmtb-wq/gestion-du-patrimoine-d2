@@ -141,21 +141,41 @@ def get_macro_data():
         return macro_info
     except: return {}
 
+# --- FIX : FONCTION FONDAMENTAUX ROBUSTE ---
 @st.cache_data(ttl=86400)
 def get_fundamentals(tickers):
     infos = []
     for t in tickers:
         try:
             ticker_obj = yf.Ticker(t)
-            dat = ticker_obj.info 
+            # On utilise un dictionnaire vide par défaut si .info échoue
+            dat = {}
+            try:
+                dat = ticker_obj.info
+            except:
+                pass # Continue même si yfinance plante sur .info
+
+            short_name = dat.get('shortName', t)
             sector = dat.get('sector', 'N/A')
+            
+            # Gestion safe des chiffres
             per = dat.get('trailingPE', None)
-            div = dat.get('dividendYield', None)
             per_str = f"{per:.1f}" if per else "-"
+            
+            div = dat.get('dividendYield', None)
             div_str = f"{div*100:.2f}%" if div else "-"
-            infos.append({ "Actif": t, "Nom": dat.get('shortName', t), "Secteur": sector, "PER (Cherté)": per_str, "Dividende": div_str })
-        except:
-            infos.append({"Actif": t, "Nom": "-", "Secteur": "-", "PER (Cherté)": "-", "Dividende": "-"})
+            
+            infos.append({ 
+                "Actif": t, 
+                "Nom": short_name, 
+                "Secteur": sector, 
+                "PER (Cherté)": per_str, 
+                "Dividende": div_str 
+            })
+        except Exception:
+            # Si tout plante, on met une ligne vide
+            infos.append({"Actif": t, "Nom": "Erreur Données", "Secteur": "-", "PER (Cherté)": "-", "Dividende": "-"})
+            
     return pd.DataFrame(infos)
 
 @st.cache_data
@@ -215,54 +235,37 @@ def simulate_dca(ticker, monthly_amount, years):
 
 # --- CONFIGURATION IA (GEMINI REAL) ---
 def get_ai_response_gemini(user_prompt):
-    # 1. Vérifier si la clé API est présente
     api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
-        return "⚠️ Erreur : Clé API Gemini manquante. Veuillez l'ajouter dans les Secrets de Streamlit."
+        return "⚠️ Erreur : Clé API Gemini manquante. Ajoutez GEMINI_API_KEY dans les Secrets."
 
     genai.configure(api_key=api_key)
     
-    # 2. Récupérer le contexte du marché (RAG)
     macro = get_macro_data()
     macro_text = "Données Macro (Temps réel) : " + ", ".join([f"{k}: {v[0]:.2f} (Var: {v[1]:+.2f}%)" for k,v in macro.items()])
     
-    # 3. Récupérer le contexte utilisateur
     portfolio_context = "L'utilisateur n'a pas encore saisi de transactions."
     if not st.session_state.journal_ordres.empty:
         tickers = st.session_state.journal_ordres['Ticker'].unique()
-        portfolio_context = f"Portefeuille actuel de l'utilisateur : {', '.join(tickers)}."
+        portfolio_context = f"Portefeuille actuel : {', '.join(tickers)}."
 
-    # 4. Construire le Prompt Expert
     system_instruction = f"""
-    Tu es "Gemini Finance", un analyste financier expert et pragmatique pour un étudiant en Prépa D2 (Économie Gestion).
-    
-    CONTEXTE ACTUEL :
-    {macro_text}
-    {portfolio_context}
-    
-    TES MISSIONS :
-    1. Analyse : Utilise les données macro (VIX, Taux, etc.) pour contextualiser ta réponse.
-    2. Critique : Pour chaque actif ou stratégie mentionné, tu DOIS présenter les risques, les inconvénients et le scénario "Bear Case" (pessimiste). Ne sois jamais complaisant.
-    3. Pédagogie : Explique les concepts (volatilité, bêta, corrélation) si nécessaire.
-    4. Prudence : Rappelle toujours que les performances passées ne préjugent pas des futures.
-    
-    Réponds de manière structurée et professionnelle.
+    Tu es "Gemini Finance", un analyste expert pour étudiant en Prépa D2.
+    Données Macro: {macro_text}
+    Portefeuille: {portfolio_context}
+    Missions: Analyser, Critiquer (Risques/Bear Case), Expliquer.
     """
     
-    # --- FIX 8.0 : ON UTILISE LE MODELE LE PLUS RECENT ET STABLE ---
-    # On teste plusieurs modèles au cas où l'un n'est pas dispo
-    models_to_try = ['gemini-1.5-flash', 'gemini-pro']
-    
-    for model_name in models_to_try:
-        try:
-            model = genai.GenerativeModel(model_name)
-            full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
-            response = model.generate_content(full_prompt)
-            return response.text
-        except Exception:
-            continue # Si ça rate, on essaie le suivant
-
-    return "Erreur : Impossible de contacter Gemini avec les modèles disponibles. Vérifiez votre clé API."
+    # --- FIX 9.0 : FORCER UN MODELE SPÉCIFIQUE ET CATCHER L'ERREUR ---
+    try:
+        # On utilise le modèle le plus stable actuellement
+        model = genai.GenerativeModel('gemini-1.5-flash') 
+        full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        # On renvoie l'erreur brute pour déboguer si besoin
+        return f"🚨 Erreur technique Gemini : {str(e)}"
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -274,7 +277,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v8.0 • News & Fix")
+    st.caption("v9.0 • Fix All")
 
 # ==============================================================================
 # PAGES 
@@ -346,9 +349,13 @@ elif menu_selection == "Marchés & Analyse":
     with col_period:
         start_date = st.date_input("Depuis", value=datetime.now() - timedelta(days=365*2))
     if tickers:
-        st.markdown("#### 🔎 FONDAMENTAUX")
-        st.dataframe(get_fundamentals(tickers), use_container_width=True, hide_index=True)
-        with st.spinner('Calculs...'):
+        st.markdown("#### 🔎 FICHES FONDAMENTALES")
+        # FIX : Affichage sécurisé des fondamentaux
+        with st.spinner("Chargement des fiches..."):
+            df_fund = get_fundamentals(tickers)
+            st.dataframe(df_fund, use_container_width=True, hide_index=True)
+
+        with st.spinner('Calculs techniques...'):
             df_prices = get_stock_data_optimized(tickers, start_date, datetime.now())
         if not df_prices.empty:
             tab_alloc, tab_optim = st.tabs(["📊 ALLOCATION", "🧠 MARKOWITZ"])
@@ -478,8 +485,9 @@ elif menu_selection == "Calculateur Inflation":
 
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
-    # MISE À JOUR DES SOURCES AVEC PLUS DE CHOIX
+    # MISE À JOUR : AJOUT D'EURONEWS ET AUTRES
     RSS_FEEDS = {
+        "🇪🇺 Euronews Business": "https://fr.euronews.com/rss?format=xml&level=theme&name=business",
         "🇫🇷 Les Echos": "https://services.lesechos.fr/rss/une.xml",
         "🇫🇷 Boursorama": "https://www.boursorama.com/rss/actualites/economie",
         "🇫🇷 Le Revenu": "https://www.lerevenu.com/feed/",
