@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import feedparser # NOUVEAU MODULE POUR LES NEWS
+import feedparser 
+import requests # NOUVEAU : Pour contourner les blocages anti-robots
 from datetime import datetime, timedelta
 
 # --- IMPORT MODULES LOCAUX ---
@@ -62,7 +63,7 @@ st.markdown("""
         transform: translateY(-2px);
     }
     
-    .news-title { font-size: 18px; font-weight: 600; color: #FAFAFA; margin-bottom: 5px; }
+    .news-title { font-size: 16px; font-weight: 600; color: #FAFAFA; margin-bottom: 5px; }
     .news-date { font-size: 12px; color: #D4AF37; margin-bottom: 10px; }
     .news-summary { font-size: 14px; color: #B0B0B0; line-height: 1.5; }
     .news-link { color: #D4AF37; text-decoration: none; font-size: 14px; font-weight: 500; }
@@ -101,7 +102,7 @@ if not check_password(): st.stop()
 if 'journal_ordres' not in st.session_state:
     st.session_state.journal_ordres = pd.DataFrame(columns=['Date', 'Ticker', 'Type', 'Quantité', 'Prix Unitaire', 'Frais', 'Total'])
 
-# Dictionnaire des Flux RSS (Sources Gratuites)
+# RSS FEEDS
 RSS_FEEDS = {
     "🌍 Général (Les Echos)": "https://services.lesechos.fr/rss/une.xml",
     "📈 Bourse (Boursorama)": "https://www.boursorama.com/rss/actualites/economie",
@@ -110,20 +111,33 @@ RSS_FEEDS = {
     "🇪🇺 Économie (Euronews)": "https://fr.euronews.com/rss?format=xml&level=theme&name=business"
 }
 
+# --- FONCTION CORRIGÉE (ROBUSTE) ---
 def fetch_news(feed_url):
-    """Récupère les news depuis un flux RSS"""
+    """Récupère les news avec un User-Agent pour éviter les blocages"""
     news_list = []
     try:
-        feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:10]: # On garde les 10 plus récents
-            news_list.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": entry.get("published", entry.get("updated", "Date inconnue")),
-                "summary": entry.get("summary", "Pas de résumé disponible.")[:200] + "..." # Tronquer le résumé
-            })
-    except:
+        # On se fait passer pour un navigateur Chrome
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        # On télécharge la page avec requests d'abord
+        response = requests.get(feed_url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            # On donne le contenu téléchargé à feedparser
+            feed = feedparser.parse(response.content)
+            
+            for entry in feed.entries[:8]: # Top 8
+                news_list.append({
+                    "title": entry.title,
+                    "link": entry.link,
+                    "published": entry.get("published", entry.get("updated", "")),
+                    "summary": entry.get("summary", "Lire l'article...")[:180] + "..."
+                })
+    except Exception as e:
+        st.error(f"Erreur de connexion : {e}")
         return []
+        
     return news_list
 
 def style_plotly(fig):
@@ -144,7 +158,6 @@ with st.sidebar:
     st.markdown("### WEALTH MANAGER")
     st.markdown("---")
     
-    # AJOUT DU NOUVEL ONGLET DANS LA LISTE
     menu_selection = st.radio(
         "NAVIGATION",
         ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"],
@@ -156,7 +169,7 @@ with st.sidebar:
     st.markdown("#### RECHERCHE RAPIDE")
     search_query = st.text_input("Rechercher un actif...", placeholder="AAPL, BTC...")
     st.markdown("---")
-    st.caption("v1.5.0 • News Feed Added")
+    st.caption("v1.5.1 • News Fix")
 
 # ==============================================================================
 # PAGE 1 : TABLEAU DE BORD
@@ -282,12 +295,11 @@ elif menu_selection == "Transactions":
     st.dataframe(st.session_state.journal_ordres, use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# PAGE 4 : ACTUALITÉS & INFOS (NOUVEAU)
+# PAGE 4 : ACTUALITÉS
 # ==============================================================================
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
     
-    # Sélecteur de source
     source_choice = st.selectbox("Choisir une source :", list(RSS_FEEDS.keys()))
     
     if source_choice:
@@ -298,13 +310,9 @@ elif menu_selection == "Actualités & Infos":
         
         if news_items:
             st.markdown("---")
-            # Affichage en grille (2 colonnes)
             col1, col2 = st.columns(2)
-            
             for i, item in enumerate(news_items):
-                # On alterne les colonnes
                 with col1 if i % 2 == 0 else col2:
-                    # On injecte du HTML pour faire une jolie carte
                     st.markdown(f"""
                     <div class="news-card">
                         <div class="news-title">{item['title']}</div>
@@ -315,4 +323,5 @@ elif menu_selection == "Actualités & Infos":
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            st.warning("Impossible de récupérer les actualités pour le moment.")
+            st.warning("Aucune info disponible. Le site bloque peut-être encore l'accès.")
+            
