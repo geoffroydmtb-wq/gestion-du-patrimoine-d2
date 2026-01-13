@@ -6,3 +6,4 @@ matplotlib
 feedparser
 requests
 numpy
+google-generativeai
