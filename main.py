@@ -141,41 +141,27 @@ def get_macro_data():
         return macro_info
     except: return {}
 
-# --- FIX : FONCTION FONDAMENTAUX ROBUSTE ---
+# --- FONCTION FONDAMENTAUX ROBUSTE ---
 @st.cache_data(ttl=86400)
 def get_fundamentals(tickers):
     infos = []
     for t in tickers:
         try:
             ticker_obj = yf.Ticker(t)
-            # On utilise un dictionnaire vide par défaut si .info échoue
             dat = {}
-            try:
-                dat = ticker_obj.info
-            except:
-                pass # Continue même si yfinance plante sur .info
+            try: dat = ticker_obj.info
+            except: pass 
 
             short_name = dat.get('shortName', t)
             sector = dat.get('sector', 'N/A')
-            
-            # Gestion safe des chiffres
             per = dat.get('trailingPE', None)
             per_str = f"{per:.1f}" if per else "-"
-            
             div = dat.get('dividendYield', None)
             div_str = f"{div*100:.2f}%" if div else "-"
             
-            infos.append({ 
-                "Actif": t, 
-                "Nom": short_name, 
-                "Secteur": sector, 
-                "PER (Cherté)": per_str, 
-                "Dividende": div_str 
-            })
+            infos.append({ "Actif": t, "Nom": short_name, "Secteur": sector, "PER (Cherté)": per_str, "Dividende": div_str })
         except Exception:
-            # Si tout plante, on met une ligne vide
             infos.append({"Actif": t, "Nom": "Erreur Données", "Secteur": "-", "PER (Cherté)": "-", "Dividende": "-"})
-            
     return pd.DataFrame(infos)
 
 @st.cache_data
@@ -233,39 +219,48 @@ def simulate_dca(ticker, monthly_amount, years):
         history_invest.append(total_invested)
     return pd.DataFrame({'Date': dates, 'Valeur Portefeuille': history_val, 'Total Investi': history_invest})
 
-# --- CONFIGURATION IA (GEMINI REAL) ---
+# --- CONFIGURATION IA (GEMINI MULTI-MODELES) ---
 def get_ai_response_gemini(user_prompt):
     api_key = st.secrets.get("GEMINI_API_KEY")
-    if not api_key:
-        return "⚠️ Erreur : Clé API Gemini manquante. Ajoutez GEMINI_API_KEY dans les Secrets."
+    if not api_key: return "⚠️ Erreur : Clé API manquante. Veuillez l'ajouter dans les Secrets."
 
     genai.configure(api_key=api_key)
     
     macro = get_macro_data()
-    macro_text = "Données Macro (Temps réel) : " + ", ".join([f"{k}: {v[0]:.2f} (Var: {v[1]:+.2f}%)" for k,v in macro.items()])
+    macro_text = "Données Macro : " + ", ".join([f"{k}: {v[0]:.2f}" for k,v in macro.items()])
     
-    portfolio_context = "L'utilisateur n'a pas encore saisi de transactions."
+    portfolio_context = "Pas de portefeuille."
     if not st.session_state.journal_ordres.empty:
         tickers = st.session_state.journal_ordres['Ticker'].unique()
-        portfolio_context = f"Portefeuille actuel : {', '.join(tickers)}."
+        portfolio_context = f"Actifs : {', '.join(tickers)}."
 
     system_instruction = f"""
-    Tu es "Gemini Finance", un analyste expert pour étudiant en Prépa D2.
-    Données Macro: {macro_text}
+    Tu es un analyste expert pour étudiant en Prépa D2.
+    Données: {macro_text}
     Portefeuille: {portfolio_context}
-    Missions: Analyser, Critiquer (Risques/Bear Case), Expliquer.
+    Missions: Analyser, Critiquer (Risques), Expliquer.
     """
     
-    # --- FIX 9.0 : FORCER UN MODELE SPÉCIFIQUE ET CATCHER L'ERREUR ---
-    try:
-        # On utilise le modèle le plus stable actuellement
-        model = genai.GenerativeModel('gemini-1.5-flash') 
-        full_prompt = f"{system_instruction}\n\nQuestion utilisateur : {user_prompt}"
-        response = model.generate_content(full_prompt)
-        return response.text
-    except Exception as e:
-        # On renvoie l'erreur brute pour déboguer si besoin
-        return f"🚨 Erreur technique Gemini : {str(e)}"
+    # --- LISTE DES MODELES A TESTER DANS L'ORDRE ---
+    models_to_try = [
+        'gemini-1.5-flash', 
+        'gemini-pro', 
+        'gemini-1.0-pro'
+    ]
+    
+    last_error = ""
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            full_prompt = f"{system_instruction}\n\nQuestion : {user_prompt}"
+            response = model.generate_content(full_prompt)
+            return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue # Si ça rate, on essaie le suivant
+            
+    return f"🚨 Tous les modèles ont échoué. Erreur technique : {last_error}"
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -273,11 +268,20 @@ with st.sidebar:
     st.markdown("---")
     menu_selection = st.radio(
         "NAVIGATION", 
-        ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Conseiller IA", "Simulateur DCA", "Calculateur Inflation", "Actualités & Infos"], 
+        [
+            "Tableau de Bord", 
+            "Marchés & Analyse", 
+            "Observatoire Macro", # NOUVEAU
+            "Transactions", 
+            "Conseiller IA", 
+            "Simulateur DCA", 
+            "Calculateur Inflation", 
+            "Actualités & Infos"
+        ], 
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v9.0 • Fix All")
+    st.caption("v9.2 • ENS D2 Edition")
 
 # ==============================================================================
 # PAGES 
@@ -350,7 +354,6 @@ elif menu_selection == "Marchés & Analyse":
         start_date = st.date_input("Depuis", value=datetime.now() - timedelta(days=365*2))
     if tickers:
         st.markdown("#### 🔎 FICHES FONDAMENTALES")
-        # FIX : Affichage sécurisé des fondamentaux
         with st.spinner("Chargement des fiches..."):
             df_fund = get_fundamentals(tickers)
             st.dataframe(df_fund, use_container_width=True, hide_index=True)
@@ -394,6 +397,57 @@ elif menu_selection == "Marchés & Analyse":
                     full_names = [get_readable_name(t) for t in df_prices.columns]
                     opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': weights_record[max_idx]})
                     st.dataframe(opt_df.T)
+
+# ==============================================================================
+# PAGE : OBSERVATOIRE MACRO (NOUVEAU)
+# ==============================================================================
+elif menu_selection == "Observatoire Macro":
+    st.title("Observatoire Macro-Économique")
+    st.markdown("Analyse des cycles économiques via la structure des taux d'intérêt.")
+
+    with st.spinner("Analyse de la courbe des taux..."):
+        try:
+            # Récupération Taux 10 ans (^TNX) et Taux 13 semaines (^IRX)
+            rates_data = yf.download(["^TNX", "^IRX"], period="5y", progress=False)['Close']
+            
+            rates = pd.DataFrame()
+            rates['10Y'] = rates_data['^TNX']
+            rates['Short'] = rates_data['^IRX']
+            rates = rates.dropna()
+            
+            rates['Spread'] = rates['10Y'] - rates['Short']
+            
+            last_spread = rates['Spread'].iloc[-1]
+            last_10y = rates['10Y'].iloc[-1]
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Taux 10 Ans (US)", f"{last_10y:.2f}%", help="Taux sans risque de référence.")
+            
+            is_inverted = last_spread < 0
+            spread_color = "inverse" if is_inverted else "normal"
+            c2.metric("Spread (10Y - 3M)", f"{last_spread:.2f} pts", delta_color=spread_color, help="Négatif = Inversion = Risque Récession.")
+            
+            status = "🔴 ALERTE RÉCESSION (Courbe Inversée)" if is_inverted else "🟢 EXPANSION (Courbe Normale)"
+            c3.write(f"**Cycle Actuel :**\n\n{status}")
+
+            st.markdown("#### 📉 La Courbe des Taux")
+            
+            fig = go.Figure()
+            fig.add_hrect(y0=-2, y1=0, line_width=0, fillcolor="red", opacity=0.1)
+            fig.add_trace(go.Scatter(x=rates.index, y=rates['Spread'], mode='lines', name='Spread', line=dict(color='#D4AF37', width=2)))
+            fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
+            
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color="#A0A0A0"), xaxis_title="Année", yaxis_title="Spread (Points de base)"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            with st.expander("📚 Comprendre la théorie économique"):
+                st.markdown("Une courbe inversée (taux courts > taux longs) signale que les investisseurs anticipent une baisse future de la croissance et de l'inflation, forçant la Banque Centrale à baisser ses taux.")
+
+        except Exception as e:
+            st.error(f"Erreur données macro : {e}")
 
 elif menu_selection == "Transactions":
     st.title("Journal")
@@ -485,7 +539,6 @@ elif menu_selection == "Calculateur Inflation":
 
 elif menu_selection == "Actualités & Infos":
     st.title("Actualités Financières")
-    # MISE À JOUR : AJOUT D'EURONEWS ET AUTRES
     RSS_FEEDS = {
         "🇪🇺 Euronews Business": "https://fr.euronews.com/rss?format=xml&level=theme&name=business",
         "🇫🇷 Les Echos": "https://services.lesechos.fr/rss/une.xml",
@@ -520,3 +573,4 @@ elif menu_selection == "Actualités & Infos":
                 with col1 if i % 2 == 0 else col2:
                     st.markdown(f"""<div class="news-card"><div class="news-title">{item['title']}</div><div class="news-date">{item['published']}</div><div class="news-summary">{item['summary']}</div><br><a href="{item['link']}" target="_blank" class="news-link">Lire l'article complet →</a></div>""", unsafe_allow_html=True)
         else: st.warning("Aucune info disponible.")
+        
