@@ -96,15 +96,10 @@ except ImportError: CATALOGUE = {}
 # --- FONCTIONS UTILITAIRES ---
 
 def get_readable_name(ticker):
-    """Traduit 'AAPL' en 'AAPL (Apple Inc.)' pour l'affichage"""
     if not CATALOGUE: return ticker
     for cat in CATALOGUE.values():
         for name, code in cat.items():
-            if code == ticker:
-                # Le nom dans le catalogue est souvent "Apple (AAPL)"
-                # On veut extraire juste "Apple"
-                clean_name = name.split(" (")[0]
-                return f"{ticker} ({clean_name})"
+            if code == ticker: return f"{ticker} ({name.split(' (')[0]})"
     return ticker
 
 def style_plotly(fig):
@@ -137,19 +132,52 @@ def get_macro_data():
         return macro_info
     except: return {}
 
+@st.cache_data(ttl=86400) # Cache 24h pour les fondamentaux
+def get_fundamentals(tickers):
+    """Récupère PER, Yield, Secteur pour chaque ticker"""
+    infos = []
+    for t in tickers:
+        try:
+            ticker_obj = yf.Ticker(t)
+            # info = ticker_obj.info # Parfois lent
+            # On simule ou on tente une récupération rapide.
+            # Pour l'exemple robuste, on fait un try/except précis
+            i = ticker_obj.fast_info
+            
+            # Note: fast_info est plus rapide mais moins complet. 
+            # Si on veut le PER/Sector, il faut souvent .info qui est lent.
+            # On va utiliser .info mais avec parcimonie.
+            dat = ticker_obj.info 
+            
+            sector = dat.get('sector', 'N/A')
+            per = dat.get('trailingPE', None)
+            div = dat.get('dividendYield', None)
+            
+            # Formatage
+            per_str = f"{per:.1f}" if per else "-"
+            div_str = f"{div*100:.2f}%" if div else "-"
+            
+            infos.append({
+                "Actif": t,
+                "Nom": dat.get('shortName', t),
+                "Secteur": sector,
+                "PER (Cherté)": per_str,
+                "Dividende": div_str
+            })
+        except:
+            infos.append({"Actif": t, "Nom": "-", "Secteur": "-", "PER (Cherté)": "-", "Dividende": "-"})
+    return pd.DataFrame(infos)
+
 @st.cache_data
 def get_stock_data_optimized(tickers, start, end):
     if not tickers: return pd.DataFrame()
-    try:
-        df = yf.download(tickers, start=start, end=end, progress=False)
-    except Exception: return pd.DataFrame()
+    try: df = yf.download(tickers, start=start, end=end, progress=False)
+    except: return pd.DataFrame()
     if df.empty: return pd.DataFrame()
-    
     target_col = 'Adj Close'
     if target_col not in df.columns:
         if 'Close' in df.columns: target_col = 'Close'
         else: return pd.DataFrame()
-
     data = df[target_col]
     if len(tickers) == 1:
         if isinstance(data, pd.Series): data = data.to_frame(); data.columns = tickers
@@ -182,13 +210,14 @@ with st.sidebar:
     st.markdown("---")
     menu_selection = st.radio("NAVIGATION", ["Tableau de Bord", "Marchés & Analyse", "Transactions", "Actualités & Infos"], label_visibility="collapsed")
     st.markdown("---")
-    st.caption("v2.2 • Clear Names")
+    st.caption("v3.0 • Ultimate Edition")
 
 # ==============================================================================
-# PAGE 1 : TABLEAU DE BORD
+# PAGE 1 : TABLEAU DE BORD (AVEC CALCULATEUR RENTE)
 # ==============================================================================
 if menu_selection == "Tableau de Bord":
-    st.title("Synthèse Patrimoniale")
+    st.title("Synthèse & Rente Future")
+    
     with st.expander("📝 Mettre à jour mes soldes", expanded=True):
         c1, c2, c3 = st.columns(3)
         livret_a = c1.number_input("Liquidités (€)", value=10000.0, step=100.0)
@@ -196,6 +225,7 @@ if menu_selection == "Tableau de Bord":
         crypto = c3.number_input("Crypto (€)", value=1000.0, step=100.0)
     
     total_wealth = livret_a + bourse + crypto
+    
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     c1.metric("Valeur Nette", f"{total_wealth:,.0f} €")
@@ -211,19 +241,42 @@ if menu_selection == "Tableau de Bord":
         fig.update_layout(showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2))
         st.plotly_chart(style_plotly(fig), use_container_width=True)
     with c_chart2:
-        st.markdown("#### PROJECTION")
-        c_a, c_b = st.columns(2)
-        apport = c_a.number_input("Apport/mois", value=500.0)
-        taux = c_b.slider("Rendement (%)", 0, 15, 6) / 100
+        st.markdown("#### PROJECTION & RENTE PASSIVE")
+        c_a, c_b, c_c = st.columns(3)
+        apport = c_a.number_input("Apport/mois (€)", value=500.0)
+        taux = c_b.slider("Rendement Moyen (%)", 0, 15, 7) / 100
+        yield_target = c_c.slider("Yield Dividende (%)", 0, 8, 3) / 100 # Pour calculer la rente
+        
+        # Calcul Projection
+        annees = 20
         valeurs = [total_wealth]
-        for _ in range(15): valeurs.append(valeurs[-1] * (1 + taux) + (apport * 12))
-        df_proj = pd.DataFrame({'Année': range(16), 'Capital': valeurs})
-        fig_area = px.area(df_proj, x='Année', y='Capital')
-        fig_area.update_traces(line_color='#D4AF37', fillcolor='rgba(212, 175, 55, 0.1)')
-        st.plotly_chart(style_plotly(fig_area), use_container_width=True)
+        rentes = [total_wealth * yield_target / 12] # Rente mensuelle
+        
+        for _ in range(annees):
+            nouveau_cap = valeurs[-1] * (1 + taux) + (apport * 12)
+            valeurs.append(nouveau_cap)
+            rentes.append(nouveau_cap * yield_target / 12)
+            
+        df_proj = pd.DataFrame({'Année': range(annees + 1), 'Capital': valeurs, 'Rente Mensuelle': rentes})
+        
+        # Double graph (Capital et Rente)
+        tab_cap, tab_rente = st.tabs(["💰 CAPITAL TOTAL", "🏖️ RENTE MENSUELLE"])
+        
+        with tab_cap:
+            fig_area = px.area(df_proj, x='Année', y='Capital')
+            fig_area.update_traces(line_color='#D4AF37', fillcolor='rgba(212, 175, 55, 0.1)')
+            st.plotly_chart(style_plotly(fig_area), use_container_width=True)
+            st.caption(f"Capital estimé dans {annees} ans : **{valeurs[-1]:,.0f} €**")
+            
+        with tab_rente:
+            fig_bar = px.bar(df_proj, x='Année', y='Rente Mensuelle')
+            fig_bar.update_traces(marker_color='#FAFAFA')
+            st.plotly_chart(style_plotly(fig_bar), use_container_width=True)
+            st.caption(f"Rente passive potentielle : **{rentes[-1]:,.0f} € / mois** (basé sur {yield_target*100}% de dividendes)")
+
 
 # ==============================================================================
-# PAGE 2 : MARCHÉS & ANALYSE
+# PAGE 2 : MARCHÉS & ANALYSE (AVEC FONDAMENTAUX + VaR)
 # ==============================================================================
 elif menu_selection == "Marchés & Analyse":
     
@@ -255,7 +308,15 @@ elif menu_selection == "Marchés & Analyse":
         start_date = st.date_input("Depuis", value=datetime.now() - timedelta(days=365*2))
 
     if tickers:
-        with st.spinner('Analyse des données...'):
+        
+        # --- BLOC FONDAMENTAUX (NOUVEAU) ---
+        st.markdown("#### 🔎 FICHES FONDAMENTALES")
+        with st.spinner("Analyse des entreprises..."):
+            df_fund = get_fundamentals(tickers)
+            st.dataframe(df_fund, use_container_width=True, hide_index=True)
+        # -----------------------------------
+
+        with st.spinner('Calculs techniques...'):
             df_prices = get_stock_data_optimized(tickers, start_date, datetime.now())
         
         if not df_prices.empty:
@@ -268,60 +329,60 @@ elif menu_selection == "Marchés & Analyse":
                 weights = []
                 found = df_prices.columns.tolist()
                 for i, t in enumerate(found):
-                    # NOUVEAU : On utilise get_readable_name pour l'affichage
                     label = get_readable_name(t)
                     with cols[i % 4]: weights.append(st.number_input(label, 0.0, 1.0, 1.0/len(found), 0.05, key=f"w_{t}"))
                 
-                use_benchmark = st.checkbox("Comparer au S&P 500 (SPY)", value=True)
-                
+                # --- CALCULS ---
                 df_norm = (df_prices / df_prices.iloc[0]) * 100
-                portf_ret = df_prices.pct_change().dropna().dot(weights)
+                returns = df_prices.pct_change().dropna()
+                portf_ret = returns.dot(weights)
                 portf_cum = (1 + portf_ret).cumprod() * 100
                 df_final = df_norm.copy()
                 df_final['PORTFOLIO'] = portf_cum.fillna(100)
                 
-                if use_benchmark:
-                    try:
-                        bench = get_stock_data_optimized(['SPY'], start_date, datetime.now())
-                        if not bench.empty:
-                            bench_norm = (bench / bench.iloc[0]) * 100
-                            df_final['S&P 500'] = bench_norm
-                    except: pass
+                # Benchmark SPY
+                try:
+                    bench = get_stock_data_optimized(['SPY'], start_date, datetime.now())
+                    if not bench.empty: df_final['S&P 500'] = (bench / bench.iloc[0]) * 100
+                except: pass
                 
                 colors = ["#D4AF37" if c == "PORTFOLIO" else "#FAFAFA" if c == "S&P 500" else "#333333" for c in df_final.columns]
                 st.line_chart(df_final, color=colors)
                 
-                c_m1, c_m2 = st.columns(2)
+                # --- MÉTRIQUES AVANCÉES (AVEC VaR) ---
+                c_m1, c_m2, c_m3 = st.columns(3)
+                
+                # Calcul VaR Historique (95%)
+                var_95 = np.percentile(portf_ret, 5) # 5eme centile
+                
                 from logic.metrics import calculate_key_metrics, get_correlation_matrix
                 with c_m1:
-                    st.markdown("#### RISQUE")
+                    st.markdown("#### RISQUE (Sharpe/Vol)")
                     st.dataframe(calculate_key_metrics(pd.DataFrame({'Portfolio': df_final['PORTFOLIO']})).T.style.format("{:.2f}"))
-                with c_m2: 
+                with c_m2:
+                     st.markdown("#### VALUE AT RISK (95%)")
+                     st.metric("VaR (1 jour)", f"{var_95:.2%}", "Risque de perte max (conf. 95%)")
+                     st.caption("Cela signifie qu'il y a 5% de chances que votre portefeuille perde plus que ce montant en une journée.")
+                with c_m3: 
                     st.markdown("#### CORRÉLATION")
-                    # NOUVEAU : On renomme les colonnes et index pour l'affichage
                     corr = get_correlation_matrix(df_prices)
-                    corr.index = [get_readable_name(t) for t in corr.index]
-                    corr.columns = [get_readable_name(t) for t in corr.columns]
+                    corr.index = [t.split('(')[0] for t in corr.index] # Short names
+                    corr.columns = [t.split('(')[0] for t in corr.columns]
                     st.dataframe(corr.style.background_gradient(cmap='cividis', axis=None).format("{:.2f}"))
             
             with tab_optim:
-                st.markdown("#### FRONTIÈRE EFFICIENTE (MONTE CARLO)")
-                if st.button("Lancer l'Optimisation"):
+                st.markdown("#### FRONTIÈRE EFFICIENTE")
+                if st.button("Lancer l'Optimisation (Monte Carlo)"):
                     results, weights_record = run_monte_carlo_simulation(df_prices)
-                    max_sharpe_idx = np.argmax(results[2])
-                    sdp, rp = results[1, max_sharpe_idx], results[0, max_sharpe_idx]
-                    best_weights = weights_record[max_sharpe_idx]
-                    
+                    max_idx = np.argmax(results[2])
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=results[1,:], y=results[0,:], mode='markers', marker=dict(color=results[2,:], colorscale='Cividis', size=5), name='Portefeuilles'))
-                    fig.add_trace(go.Scatter(x=[sdp], y=[rp], mode='markers', marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')), name='Max Sharpe'))
+                    fig.add_trace(go.Scatter(x=results[1,:], y=results[0,:], mode='markers', marker=dict(color=results[2,:], colorscale='Cividis', size=5), name='Simulations'))
+                    fig.add_trace(go.Scatter(x=[results[1, max_idx]], y=[results[0, max_idx]], mode='markers', marker=dict(color='#D4AF37', size=15, line=dict(width=2, color='white')), name='Optimal'))
                     fig.update_layout(title='Frontière Efficiente', xaxis_title='Volatilité', yaxis_title='Rendement', font=dict(color='#A0A0A0'), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    st.markdown("#### ALLOCATION OPTIMALE")
-                    # NOUVEAU : Noms complets dans le tableau d'optimisation
                     full_names = [get_readable_name(t) for t in df_prices.columns]
-                    opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': best_weights})
+                    opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': weights_record[max_idx]})
                     opt_df['Poids Idéal'] = opt_df['Poids Idéal'].apply(lambda x: f"{x*100:.2f}%")
                     st.dataframe(opt_df.T)
 
@@ -369,7 +430,7 @@ elif menu_selection == "Actualités & Infos":
     def fetch_news(feed_url):
         news_list = []
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            headers = {"User-Agent": "Mozilla/5.0"}
             response = requests.get(feed_url, headers=headers, timeout=5)
             if response.status_code == 200:
                 feed = feedparser.parse(response.content)
