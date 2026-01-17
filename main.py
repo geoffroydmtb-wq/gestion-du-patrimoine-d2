@@ -271,7 +271,8 @@ with st.sidebar:
         [
             "Tableau de Bord", 
             "Marchés & Analyse", 
-            "Observatoire Macro", # NOUVEAU
+            "Observatoire Macro",
+            "Gestion Budget",  # NOUVEL ONGLET AJOUTÉ ICI
             "Transactions", 
             "Conseiller IA", 
             "Simulateur DCA", 
@@ -281,7 +282,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v9.2 • ENS D2 Edition")
+    st.caption("v10.0 • Full Features")
 
 # ==============================================================================
 # PAGES 
@@ -399,7 +400,7 @@ elif menu_selection == "Marchés & Analyse":
                     st.dataframe(opt_df.T)
 
 # ==============================================================================
-# PAGE : OBSERVATOIRE MACRO (NOUVEAU)
+# PAGE : OBSERVATOIRE MACRO
 # ==============================================================================
 elif menu_selection == "Observatoire Macro":
     st.title("Observatoire Macro-Économique")
@@ -407,47 +408,91 @@ elif menu_selection == "Observatoire Macro":
 
     with st.spinner("Analyse de la courbe des taux..."):
         try:
-            # Récupération Taux 10 ans (^TNX) et Taux 13 semaines (^IRX)
             rates_data = yf.download(["^TNX", "^IRX"], period="5y", progress=False)['Close']
-            
             rates = pd.DataFrame()
             rates['10Y'] = rates_data['^TNX']
             rates['Short'] = rates_data['^IRX']
             rates = rates.dropna()
-            
             rates['Spread'] = rates['10Y'] - rates['Short']
-            
             last_spread = rates['Spread'].iloc[-1]
             last_10y = rates['10Y'].iloc[-1]
             
             c1, c2, c3 = st.columns(3)
             c1.metric("Taux 10 Ans (US)", f"{last_10y:.2f}%", help="Taux sans risque de référence.")
-            
             is_inverted = last_spread < 0
             spread_color = "inverse" if is_inverted else "normal"
             c2.metric("Spread (10Y - 3M)", f"{last_spread:.2f} pts", delta_color=spread_color, help="Négatif = Inversion = Risque Récession.")
-            
             status = "🔴 ALERTE RÉCESSION (Courbe Inversée)" if is_inverted else "🟢 EXPANSION (Courbe Normale)"
             c3.write(f"**Cycle Actuel :**\n\n{status}")
-
-            st.markdown("#### 📉 La Courbe des Taux")
             
             fig = go.Figure()
             fig.add_hrect(y0=-2, y1=0, line_width=0, fillcolor="red", opacity=0.1)
             fig.add_trace(go.Scatter(x=rates.index, y=rates['Spread'], mode='lines', name='Spread', line=dict(color='#D4AF37', width=2)))
             fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
-            
-            fig.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color="#A0A0A0"), xaxis_title="Année", yaxis_title="Spread (Points de base)"
-            )
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), xaxis_title="Année", yaxis_title="Spread (Points de base)")
             st.plotly_chart(fig, use_container_width=True)
-            
             with st.expander("📚 Comprendre la théorie économique"):
                 st.markdown("Une courbe inversée (taux courts > taux longs) signale que les investisseurs anticipent une baisse future de la croissance et de l'inflation, forçant la Banque Centrale à baisser ses taux.")
-
         except Exception as e:
             st.error(f"Erreur données macro : {e}")
+
+# ==============================================================================
+# NOUVEL ONGLET : GESTION BUDGET
+# ==============================================================================
+elif menu_selection == "Gestion Budget":
+    st.title("Optimisation Budgétaire (50/30/20)")
+    st.markdown("Analysez votre cashflow mensuel pour maximiser votre épargne.")
+    
+    col_in, col_res = st.columns([1, 2])
+    
+    with col_in:
+        st.markdown("#### 📥 Vos Flux")
+        revenu = st.number_input("Revenus Nets Mensuels (€)", value=2000, step=50)
+        
+        st.markdown("---")
+        st.caption("Charges Fixes (Besoins)")
+        loyer = st.number_input("Logement (Loyer/Crédit)", value=800, step=50)
+        courses = st.number_input("Alimentation", value=300, step=20)
+        transport = st.number_input("Transport", value=100, step=10)
+        factures = st.number_input("Factures & Assurances", value=150, step=10)
+        
+        total_besoins = loyer + courses + transport + factures
+        
+    with col_res:
+        st.markdown("#### 📊 Analyse & Diagnostic")
+        
+        # Règle 50/30/20
+        target_besoins = revenu * 0.50
+        target_loisirs = revenu * 0.30
+        target_epargne = revenu * 0.20
+        
+        reste_a_vivre = revenu - total_besoins
+        epargne_reelle_possible = max(0, reste_a_vivre - target_loisirs) # Hypothèse simplifiée
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Revenus", f"{revenu} €")
+        c2.metric("Charges Fixes", f"{total_besoins} €", f"{(total_besoins/revenu)*100:.1f}% du revenu")
+        c3.metric("Capacité Épargne (Est.)", f"{epargne_reelle_possible} €")
+        
+        st.markdown("---")
+        
+        fig = go.Figure()
+        # Barres de référence
+        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_besoins], name='Besoins (50%)', orientation='h', marker_color='#333333'))
+        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_loisirs], name='Loisirs (30%)', orientation='h', marker_color='#808080'))
+        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_epargne], name='Épargne (20%)', orientation='h', marker_color='#D4AF37'))
+        
+        # Barres utilisateur
+        fig.add_trace(go.Bar(y=['Votre Budget'], x=[total_besoins], name='Vos Fixes', orientation='h', marker_color='#FF4B4B' if total_besoins > target_besoins else '#333333'))
+        fig.add_trace(go.Bar(y=['Votre Budget'], x=[reste_a_vivre], name='Disponible (Loisirs+Epargne)', orientation='h', marker_color='#FAFAFA'))
+        
+        fig.update_layout(barmode='stack', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), height=250, margin=dict(l=0, r=0, t=0, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        if total_besoins > target_besoins:
+            st.error(f"⚠️ Vos charges fixes sont trop élevées ({(total_besoins/revenu)*100:.0f}% vs 50% recommandé). Cela réduit mécaniquement votre capacité d'investissement.")
+        else:
+            st.success(f"✅ Vos charges sont maîtrisées. Vous devriez pouvoir investir au moins {target_epargne:.0f} € par mois.")
 
 elif menu_selection == "Transactions":
     st.title("Journal")
@@ -573,4 +618,3 @@ elif menu_selection == "Actualités & Infos":
                 with col1 if i % 2 == 0 else col2:
                     st.markdown(f"""<div class="news-card"><div class="news-title">{item['title']}</div><div class="news-date">{item['published']}</div><div class="news-summary">{item['summary']}</div><br><a href="{item['link']}" target="_blank" class="news-link">Lire l'article complet →</a></div>""", unsafe_allow_html=True)
         else: st.warning("Aucune info disponible.")
-        
