@@ -241,15 +241,9 @@ def get_ai_response_gemini(user_prompt):
     Missions: Analyser, Critiquer (Risques), Expliquer.
     """
     
-    # --- LISTE DES MODELES A TESTER DANS L'ORDRE ---
-    models_to_try = [
-        'gemini-1.5-flash', 
-        'gemini-pro', 
-        'gemini-1.0-pro'
-    ]
+    models_to_try = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
     
     last_error = ""
-    
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
@@ -258,7 +252,7 @@ def get_ai_response_gemini(user_prompt):
             return response.text
         except Exception as e:
             last_error = str(e)
-            continue # Si ça rate, on essaie le suivant
+            continue
             
     return f"🚨 Tous les modèles ont échoué. Erreur technique : {last_error}"
 
@@ -271,8 +265,8 @@ with st.sidebar:
         [
             "Tableau de Bord", 
             "Marchés & Analyse", 
-            "Observatoire Macro",
-            "Gestion Budget",  # NOUVEL ONGLET AJOUTÉ ICI
+            "Observatoire Macro", 
+            "Gestion Budget", 
             "Transactions", 
             "Conseiller IA", 
             "Simulateur DCA", 
@@ -282,7 +276,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v10.0 • Full Features")
+    st.caption("v11.0 • Matrix Included")
 
 # ==============================================================================
 # PAGES 
@@ -437,11 +431,11 @@ elif menu_selection == "Observatoire Macro":
             st.error(f"Erreur données macro : {e}")
 
 # ==============================================================================
-# NOUVEL ONGLET : GESTION BUDGET
+# NOUVEL ONGLET : GESTION BUDGET AVEC MATRICE
 # ==============================================================================
 elif menu_selection == "Gestion Budget":
     st.title("Optimisation Budgétaire (50/30/20)")
-    st.markdown("Analysez votre cashflow mensuel pour maximiser votre épargne.")
+    st.markdown("Analysez votre cashflow et simulez vos scénarios financiers.")
     
     col_in, col_res = st.columns([1, 2])
     
@@ -459,40 +453,80 @@ elif menu_selection == "Gestion Budget":
         total_besoins = loyer + courses + transport + factures
         
     with col_res:
-        st.markdown("#### 📊 Analyse & Diagnostic")
+        st.markdown("#### 📊 Diagnostic")
         
-        # Règle 50/30/20
         target_besoins = revenu * 0.50
         target_loisirs = revenu * 0.30
         target_epargne = revenu * 0.20
-        
         reste_a_vivre = revenu - total_besoins
-        epargne_reelle_possible = max(0, reste_a_vivre - target_loisirs) # Hypothèse simplifiée
+        
+        # Le reste à vivre couvre les Loisirs + l'Épargne
+        # On estime la capacité d'épargne en enlevant les 30% théoriques de loisirs
+        epargne_potentielle = reste_a_vivre - target_loisirs
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Revenus", f"{revenu} €")
-        c2.metric("Charges Fixes", f"{total_besoins} €", f"{(total_besoins/revenu)*100:.1f}% du revenu")
-        c3.metric("Capacité Épargne (Est.)", f"{epargne_reelle_possible} €")
+        c2.metric("Charges Fixes", f"{total_besoins} €", f"{(total_besoins/revenu)*100:.1f}%")
+        
+        epargne_color = "normal" if epargne_potentielle > 0 else "inverse"
+        c3.metric("Capacité Épargne Est.", f"{epargne_potentielle:.0f} €", delta_color=epargne_color, help="Revenu - Charges - 30% Loisirs")
         
         st.markdown("---")
         
+        # Graphique Barres
         fig = go.Figure()
-        # Barres de référence
-        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_besoins], name='Besoins (50%)', orientation='h', marker_color='#333333'))
-        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_loisirs], name='Loisirs (30%)', orientation='h', marker_color='#808080'))
-        fig.add_trace(go.Bar(y=['Référence (50/30/20)'], x=[target_epargne], name='Épargne (20%)', orientation='h', marker_color='#D4AF37'))
-        
-        # Barres utilisateur
+        fig.add_trace(go.Bar(y=['Référence'], x=[target_besoins], name='Besoins (50%)', orientation='h', marker_color='#333333'))
+        fig.add_trace(go.Bar(y=['Référence'], x=[target_loisirs], name='Loisirs (30%)', orientation='h', marker_color='#808080'))
+        fig.add_trace(go.Bar(y=['Référence'], x=[target_epargne], name='Épargne (20%)', orientation='h', marker_color='#D4AF37'))
         fig.add_trace(go.Bar(y=['Votre Budget'], x=[total_besoins], name='Vos Fixes', orientation='h', marker_color='#FF4B4B' if total_besoins > target_besoins else '#333333'))
-        fig.add_trace(go.Bar(y=['Votre Budget'], x=[reste_a_vivre], name='Disponible (Loisirs+Epargne)', orientation='h', marker_color='#FAFAFA'))
-        
-        fig.update_layout(barmode='stack', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), height=250, margin=dict(l=0, r=0, t=0, b=0))
+        fig.add_trace(go.Bar(y=['Votre Budget'], x=[reste_a_vivre], name='Disponible', orientation='h', marker_color='#FAFAFA'))
+        fig.update_layout(barmode='stack', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), height=200, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
-        
-        if total_besoins > target_besoins:
-            st.error(f"⚠️ Vos charges fixes sont trop élevées ({(total_besoins/revenu)*100:.0f}% vs 50% recommandé). Cela réduit mécaniquement votre capacité d'investissement.")
-        else:
-            st.success(f"✅ Vos charges sont maîtrisées. Vous devriez pouvoir investir au moins {target_epargne:.0f} € par mois.")
+
+    # --- MATRICE DE SENSIBILITÉ (NOUVEAU BLOC) ---
+    st.markdown("---")
+    st.markdown("#### 🧮 Matrice de Sensibilité (Analyse What-If)")
+    st.caption("Simulation de votre **Capacité d'Épargne Théorique** en faisant varier vos Revenus (Axe Y) et vos Charges (Axe X). La zone verte indique une forte capacité d'épargne.")
+
+    # Génération des variations (-10% à +10%)
+    variation_range = list(range(-10, 15, 5)) # -10, -5, 0, 5, 10
+    
+    # Préparation des axes
+    revenus_simules = [revenu * (1 + i/100) for i in variation_range]
+    charges_simulees = [total_besoins * (1 + i/100) for i in variation_range]
+    
+    # Calcul de la matrice
+    z_values = []
+    for r_sim in revenus_simules:
+        row = []
+        for c_sim in charges_simulees:
+            # Formule : Revenu - Charges - (30% du Revenu pour Loisirs)
+            epargne = r_sim - c_sim - (r_sim * 0.30)
+            row.append(epargne)
+        z_values.append(row)
+
+    # Création de la Heatmap Plotly
+    fig_heat = go.Figure(data=go.Heatmap(
+        z=z_values,
+        x=[f"{c:.0f}€ ({i:+d}%)" for c, i in zip(charges_simulees, variation_range)],
+        y=[f"{r:.0f}€ ({i:+d}%)" for r, i in zip(revenus_simules, variation_range)],
+        colorscale='RdYlGn', # Rouge (négatif) vers Vert (positif)
+        texttemplate="%{z:.0f} €",
+        textfont={"size": 12},
+        hoverongaps=False
+    ))
+
+    fig_heat.update_layout(
+        title="Impact Croisé sur l'Épargne",
+        xaxis_title="Charges Fixes (Variation)",
+        yaxis_title="Revenus (Variation)",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#A0A0A0"),
+        height=400
+    )
+    
+    st.plotly_chart(fig_heat, use_container_width=True)
 
 elif menu_selection == "Transactions":
     st.title("Journal")
