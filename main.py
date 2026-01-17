@@ -276,7 +276,7 @@ with st.sidebar:
         label_visibility="collapsed"
     )
     st.markdown("---")
-    st.caption("v11.0 • Matrix Included")
+    st.caption("v12.0 • Smart Budget")
 
 # ==============================================================================
 # PAGES 
@@ -393,9 +393,6 @@ elif menu_selection == "Marchés & Analyse":
                     opt_df = pd.DataFrame({'Actif': full_names, 'Poids Idéal': weights_record[max_idx]})
                     st.dataframe(opt_df.T)
 
-# ==============================================================================
-# PAGE : OBSERVATOIRE MACRO
-# ==============================================================================
 elif menu_selection == "Observatoire Macro":
     st.title("Observatoire Macro-Économique")
     st.markdown("Analyse des cycles économiques via la structure des taux d'intérêt.")
@@ -431,7 +428,7 @@ elif menu_selection == "Observatoire Macro":
             st.error(f"Erreur données macro : {e}")
 
 # ==============================================================================
-# NOUVEL ONGLET : GESTION BUDGET AVEC MATRICE
+# PAGE : GESTION BUDGET AVEC OPTIMISEUR DE RESTE A VIVRE (NOUVEAU BLOC)
 # ==============================================================================
 elif menu_selection == "Gestion Budget":
     st.title("Optimisation Budgétaire (50/30/20)")
@@ -453,79 +450,84 @@ elif menu_selection == "Gestion Budget":
         total_besoins = loyer + courses + transport + factures
         
     with col_res:
-        st.markdown("#### 📊 Diagnostic")
+        st.markdown("#### 📊 Diagnostic Cashflow")
         
-        target_besoins = revenu * 0.50
-        target_loisirs = revenu * 0.30
-        target_epargne = revenu * 0.20
+        # Le reste à vivre brut
         reste_a_vivre = revenu - total_besoins
-        
-        # Le reste à vivre couvre les Loisirs + l'Épargne
-        # On estime la capacité d'épargne en enlevant les 30% théoriques de loisirs
-        epargne_potentielle = reste_a_vivre - target_loisirs
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Revenus", f"{revenu} €")
         c2.metric("Charges Fixes", f"{total_besoins} €", f"{(total_besoins/revenu)*100:.1f}%")
         
-        epargne_color = "normal" if epargne_potentielle > 0 else "inverse"
-        c3.metric("Capacité Épargne Est.", f"{epargne_potentielle:.0f} €", delta_color=epargne_color, help="Revenu - Charges - 30% Loisirs")
+        delta_color = "normal" if reste_a_vivre > 0 else "inverse"
+        c3.metric("Reste à Vivre Total", f"{reste_a_vivre:.0f} €", delta_color=delta_color)
         
         st.markdown("---")
         
-        # Graphique Barres
-        fig = go.Figure()
-        fig.add_trace(go.Bar(y=['Référence'], x=[target_besoins], name='Besoins (50%)', orientation='h', marker_color='#333333'))
-        fig.add_trace(go.Bar(y=['Référence'], x=[target_loisirs], name='Loisirs (30%)', orientation='h', marker_color='#808080'))
-        fig.add_trace(go.Bar(y=['Référence'], x=[target_epargne], name='Épargne (20%)', orientation='h', marker_color='#D4AF37'))
-        fig.add_trace(go.Bar(y=['Votre Budget'], x=[total_besoins], name='Vos Fixes', orientation='h', marker_color='#FF4B4B' if total_besoins > target_besoins else '#333333'))
-        fig.add_trace(go.Bar(y=['Votre Budget'], x=[reste_a_vivre], name='Disponible', orientation='h', marker_color='#FAFAFA'))
-        fig.update_layout(barmode='stack', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), height=200, margin=dict(l=0, r=0, t=0, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        if reste_a_vivre > 0:
+            st.markdown("#### 🎯 Calculateur de Reste à Vivre Optimisé")
+            st.caption("Répartissez intelligemment votre Reste à Vivre entre Loisirs et Épargne.")
+            
+            mode_profil = st.select_slider(
+                "Quel est votre profil ce mois-ci ?",
+                options=["Cigale (Plaisir)", "Équilibré (Recommandé)", "Fourmi (Épargne Max)"],
+                value="Équilibré (Recommandé)"
+            )
+            
+            # Logique de répartition
+            if mode_profil == "Cigale (Plaisir)":
+                ratio_loisir = 0.70
+                ratio_epargne = 0.30
+            elif mode_profil == "Équilibré (Recommandé)":
+                ratio_loisir = 0.50 # On partage la poire en deux
+                ratio_epargne = 0.50
+            else: # Fourmi
+                ratio_loisir = 0.30
+                ratio_epargne = 0.70
+            
+            montant_loisir = reste_a_vivre * ratio_loisir
+            montant_epargne = reste_a_vivre * ratio_epargne
+            
+            col_opt1, col_opt2 = st.columns(2)
+            col_opt1.metric("🛍️ Budget Loisirs Conseillé", f"{montant_loisir:.0f} €")
+            col_opt2.metric("💰 Épargne Conseillée", f"{montant_epargne:.0f} €", f"{ratio_epargne*100:.0f}% du reste")
+            
+            # Graphique de la répartition finale
+            fig_final = go.Figure(data=[go.Pie(
+                labels=['Charges Fixes', 'Loisirs Optimisés', 'Épargne Optimisée'],
+                values=[total_besoins, montant_loisir, montant_epargne],
+                hole=.6,
+                marker=dict(colors=['#333333', '#808080', '#D4AF37'])
+            )])
+            fig_final.update_layout(height=300, margin=dict(t=0, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"))
+            st.plotly_chart(fig_final, use_container_width=True)
+            
+        else:
+            st.error("⚠️ **Alerte Rouge :** Vos charges dépassent vos revenus. Aucune optimisation possible. Vous êtes en déficit structurel. Il faut réduire le loyer ou les factures urgemment.")
 
-    # --- MATRICE DE SENSIBILITÉ (NOUVEAU BLOC) ---
+    # --- MATRICE DE SENSIBILITÉ ---
     st.markdown("---")
-    st.markdown("#### 🧮 Matrice de Sensibilité (Analyse What-If)")
-    st.caption("Simulation de votre **Capacité d'Épargne Théorique** en faisant varier vos Revenus (Axe Y) et vos Charges (Axe X). La zone verte indique une forte capacité d'épargne.")
-
-    # Génération des variations (-10% à +10%)
-    variation_range = list(range(-10, 15, 5)) # -10, -5, 0, 5, 10
-    
-    # Préparation des axes
+    st.markdown("#### 🧮 Matrice de Sensibilité")
+    variation_range = list(range(-10, 15, 5))
     revenus_simules = [revenu * (1 + i/100) for i in variation_range]
     charges_simulees = [total_besoins * (1 + i/100) for i in variation_range]
-    
-    # Calcul de la matrice
     z_values = []
     for r_sim in revenus_simules:
         row = []
         for c_sim in charges_simulees:
-            # Formule : Revenu - Charges - (30% du Revenu pour Loisirs)
+            # Epargne théorique (20% du revenu dans le modèle idéal)
             epargne = r_sim - c_sim - (r_sim * 0.30)
             row.append(epargne)
         z_values.append(row)
 
-    # Création de la Heatmap Plotly
     fig_heat = go.Figure(data=go.Heatmap(
         z=z_values,
         x=[f"{c:.0f}€ ({i:+d}%)" for c, i in zip(charges_simulees, variation_range)],
         y=[f"{r:.0f}€ ({i:+d}%)" for r, i in zip(revenus_simules, variation_range)],
-        colorscale='RdYlGn', # Rouge (négatif) vers Vert (positif)
-        texttemplate="%{z:.0f} €",
-        textfont={"size": 12},
+        colorscale='RdYlGn', texttemplate="%{z:.0f} €",
         hoverongaps=False
     ))
-
-    fig_heat.update_layout(
-        title="Impact Croisé sur l'Épargne",
-        xaxis_title="Charges Fixes (Variation)",
-        yaxis_title="Revenus (Variation)",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color="#A0A0A0"),
-        height=400
-    )
-    
+    fig_heat.update_layout(title="Capacité d'Épargne selon variations", xaxis_title="Charges", yaxis_title="Revenus", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="#A0A0A0"), height=400)
     st.plotly_chart(fig_heat, use_container_width=True)
 
 elif menu_selection == "Transactions":
